@@ -1,11 +1,14 @@
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
 from sallm import Agent
 from sallm.messages import DEFAULT_API_BASE, DEFAULT_MODEL
+
+from .tools import CHAT_TOOLS, reset_dig_state
 
 app = typer.Typer(
     name="sallm",
@@ -82,19 +85,52 @@ def _print_steps(steps):
                         "action": step.get("action"),
                         "action_input": step.get("action_input"),
                         "observation": step.get("observation"),
+                        "intermediate": step.get("intermediate"),
                     }
                 ]
             for tc in calls:
+                tag = " [intermediate]" if tc.get("intermediate") else ""
+                obs = escape(str(tc.get("observation") or ""))
+                args = escape(str(tc.get("action_input") or ""))
+                name = escape(str(tc.get("action") or ""))
                 body = (
-                    f"[bold]name[/]   {tc.get('action')}\n"
-                    f"[bold]args[/]   {tc.get('action_input')}\n"
-                    f"[bold]result[/] {tc.get('observation')}"
+                    f"[bold]name[/]   {name}{escape(tag)}\n"
+                    f"[bold]args[/]   {args}\n"
+                    f"[bold]result[/] {obs}"
                 )
                 console.print(
                     Panel(
                         body,
                         title="tool",
-                        border_style="magenta",
+                        border_style="yellow" if tc.get("intermediate") else "magenta",
+                    )
+                )
+            continue
+
+        if step.get("kind") == "nudge":
+            console.print(
+                Panel(
+                    escape(step.get("raw") or "continue"),
+                    title="nudge",
+                    border_style="dim",
+                )
+            )
+            continue
+
+        if step.get("kind") == "rejected":
+            console.print(
+                Panel(
+                    escape(step.get("raw") or ""),
+                    title="rejected early answer",
+                    border_style="red",
+                )
+            )
+            if step.get("nudge"):
+                console.print(
+                    Panel(
+                        escape(step["nudge"]),
+                        title="nudge",
+                        border_style="dim",
                     )
                 )
             continue
@@ -128,7 +164,14 @@ def chat(
         DEFAULT_API_BASE, "--api-base", help="Provider base URL"
     ),
     system: str = typer.Option(None, "--system", "-s", help="Extra system prompt"),
-    max_steps: int = typer.Option(5, "--max-steps", help="Max tool-loop steps per turn"),
+    max_steps: int = typer.Option(
+        5, "--max-steps", help="Max native tool rounds per turn"
+    ),
+    multi_step: bool = typer.Option(
+        True,
+        "--multi-step/--no-multi-step",
+        help="Allow chained tool rounds within one turn",
+    ),
 ):
     """Interactive chat REPL for testing the agent."""
     agent = Agent(
@@ -136,11 +179,16 @@ def chat(
         api_base=api_base,
         system=system,
         max_steps=max_steps,
+        multi_step=multi_step,
+        tools=CHAT_TOOLS,
     )
 
+    tool_names = ", ".join(CHAT_TOOLS) or "(none)"
     console.print(
         Panel(
             f"[bold]sallm[/] chat\nmodel: [cyan]{model}[/]\napi_base: [cyan]{api_base}[/]\n"
+            f"tools: [cyan]{tool_names}[/]\n"
+            f"multi_step: [cyan]{multi_step}[/]  max_steps: [cyan]{max_steps}[/]\n"
             "type /help for commands",
             border_style="green",
         )
@@ -166,6 +214,7 @@ def chat(
                 continue
             if cmd == "/clear":
                 agent.clear()
+                reset_dig_state()
                 console.print("[dim]conversation cleared[/]")
                 continue
             if cmd == "/history":
