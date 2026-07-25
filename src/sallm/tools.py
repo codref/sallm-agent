@@ -1,17 +1,60 @@
-"""Tool registry helpers and an example tool (`echo`).
+"""CLI tool runner: tools are subprocesses, invoked via ```run blocks."""
 
-Consumers pass their own `{name: callable}` map into `Agent(tools=...)`.
+from __future__ import annotations
 
-Tools may return an intermediate observation by prefixing the result with
-`[intermediate]` (see `INTERMEDIATE_PREFIX`). The agent then injects a
-continuation nudge and keeps the tool loop going.
-"""
+import re
+import shlex
+import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 
-import inspect
-import json
-
-# Tools return this prefix when more tool rounds are required before a final answer.
+# Tools return this prefix when more rounds are required before a final answer.
 INTERMEDIATE_PREFIX = "[intermediate]"
+
+_RUN_BLOCK_RE = re.compile(r"```run\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+
+DEFAULT_TIMEOUT = 60
+
+
+@dataclass
+class CliTool:
+    """A registered CLI tool: name maps to an argv prefix (executable + fixed args)."""
+
+    name: str
+    argv: list[str]
+    summary: str = ""
+
+
+@dataclass
+class ToolResult:
+    """Outcome of one subprocess tool run."""
+
+    name: str
+    # What the model asked for: [name, ...user args]
+    command: list[str] = field(default_factory=list)
+    stdout: str = ""
+    stderr: str = ""
+    returncode: int = 0
+    error: str | None = None  # set when the command never ran (unknown tool, etc.)
+
+    @property
+    def observation(self) -> str:
+        if self.error:
+            return self.error
+        out = (self.stdout or "").strip()
+        err = (self.stderr or "").strip()
+        if self.returncode != 0:
+            parts = [f"Error: exit {self.returncode}"]
+            if out:
+                parts.append(out)
+            if err:
+                parts.append(err)
+            return "\n".join(parts)
+        return out if out else (err or "")
+
+    @property
+    def intermediate(self) -> bool:
+        return is_intermediate(self.observation)
 
 
 def is_intermediate(observation):
@@ -28,123 +71,146 @@ def intermediate(message):
     return f"{INTERMEDIATE_PREFIX} {message}".rstrip()
 
 
-def echo(text=""):
-    """Echo text back unchanged.
-
-    Use only when the user explicitly asks to echo or repeat text.
-    Never use this to phrase your own reply.
-    """
-    return str(text)
-
-
-# Example registry — not loaded by Agent unless the consumer passes it.
-EXAMPLE_TOOLS = {
-    "echo": echo,
-}
-
-
-def _string_arg_fallback(fn, text):
-    """Map a bare string to the first string-like parameter when JSON is missing."""
-    for pname, param in inspect.signature(fn).parameters.items():
-        if param.kind in (
-            inspect.Parameter.VAR_POSITIONAL,
-            inspect.Parameter.VAR_KEYWORD,
-        ):
-            continue
-        return {pname: text}
-    return text
-
-
-def run_tool(tools, name, args):
-    """Look up and call a tool. Unknown tools return an error string."""
-    fn = tools.get(name)
-    if fn is None:
-        return f"Error: unknown tool '{name}'. Available: {', '.join(tools) or '(none)'}"
-    try:
-        if isinstance(args, str):
-            args = args.strip()
-            if not args:
-                args = {}
+def normalize_registry(tools) -> dict[str, CliTool]:
+    """Accept a dict or list of CliTool and return {name: CliTool}."""
+    if not tools:
+        return {}
+    if isinstance(tools, dict):
+        out = {}
+        for key, value in tools.items():
+            if isinstance(value, CliTool):
+                out[value.name] = value
             else:
-                try:
-                    args = json.loads(args)
-                except json.JSONDecodeError:
-                    args = _string_arg_fallback(fn, args)
-        if isinstance(args, dict):
-            return str(fn(**args))
-        return str(fn(args))
-    except Exception as exc:
-        return f"Error running tool '{name}': {exc}"
+                raise TypeError(f"tools[{key!r}] must be a CliTool, got {type(value)}")
+        return out
+    out = {}
+    for item in tools:
+        if not isinstance(item, CliTool):
+            raise TypeError(f"expected CliTool, got {type(item)}")
+        out[item.name] = item
+    return out
 
 
-def _param_schema(param):
-    annotation = param.annotation
-    if annotation is inspect.Parameter.empty or annotation is str:
-        json_type = "string"
-    elif annotation is int:
-        json_type = "integer"
-    elif annotation is float:
-        json_type = "number"
-    elif annotation is bool:
-        json_type = "boolean"
-    else:
-        json_type = "string"
-    schema = {"type": json_type}
-    if param.default is not inspect.Parameter.empty:
-        schema["default"] = param.default
-    return schema
-
-
-def tool_schemas(tools):
-    """Build OpenAI-style tool definitions for litellm completion(tools=...)."""
-    schemas = []
-    for name, fn in tools.items():
-        doc = (fn.__doc__ or "").strip()
-        # Collapse docstring so providers get full usage guidance, not only the summary line
-        description = " ".join(line.strip() for line in doc.splitlines() if line.strip()) or name
-        sig = inspect.signature(fn)
-        properties = {}
-        required = []
-        for pname, param in sig.parameters.items():
-            if param.kind in (
-                inspect.Parameter.VAR_POSITIONAL,
-                inspect.Parameter.VAR_KEYWORD,
-            ):
-                continue
-            properties[pname] = _param_schema(param)
-            if param.default is inspect.Parameter.empty:
-                required.append(pname)
-        schemas.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": properties,
-                        "required": required,
-                    },
-                },
-            }
-        )
-    return schemas
-
-
-def tool_descriptions(tools):
-    """Human-readable tool list for the system prompt (from each tool's docstring)."""
+def tool_descriptions(tools: dict[str, CliTool]) -> str:
+    """One-line summaries for the system prompt."""
     if not tools:
         return "(none)"
     lines = []
-    for name, fn in tools.items():
-        doc = (fn.__doc__ or "").strip() or "no description"
-        # Indent continuation lines under the tool name
-        doc_lines = [ln.rstrip() for ln in doc.splitlines()]
-        summary = doc_lines[0].strip() if doc_lines else "no description"
-        block = [f"- {name}: {summary}"]
-        for ln in doc_lines[1:]:
-            text = ln.strip()
-            if text:
-                block.append(f"  {text}")
-        lines.append("\n".join(block))
+    for name, tool in tools.items():
+        summary = (tool.summary or "").strip() or "no description"
+        lines.append(f"- {name}: {summary}")
     return "\n".join(lines)
+
+
+def parse_run_blocks(text) -> list[list[str]]:
+    """Extract argv lists from ```run fenced blocks (one command per line)."""
+    text = text or ""
+    commands: list[list[str]] = []
+    for match in _RUN_BLOCK_RE.finditer(text):
+        body = match.group(1)
+        for line in body.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                argv = shlex.split(line)
+            except ValueError:
+                argv = [line]
+            if argv:
+                commands.append(argv)
+    return commands
+
+
+def run_tool(
+    tool: CliTool,
+    extra_args=None,
+    timeout=DEFAULT_TIMEOUT,
+    command=None,
+) -> ToolResult:
+    """Run one CliTool as a subprocess with optional extra argv."""
+    extra_args = list(extra_args or [])
+    full_argv = list(tool.argv) + extra_args
+    display = list(command) if command is not None else [tool.name, *extra_args]
+    try:
+        proc = subprocess.run(
+            full_argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return ToolResult(
+            name=tool.name,
+            command=display,
+            stdout=proc.stdout or "",
+            stderr=proc.stderr or "",
+            returncode=proc.returncode,
+        )
+    except subprocess.TimeoutExpired:
+        return ToolResult(
+            name=tool.name,
+            command=display,
+            error=f"Error: tool '{tool.name}' timed out after {timeout}s",
+            returncode=-1,
+        )
+    except OSError as exc:
+        return ToolResult(
+            name=tool.name,
+            command=display,
+            error=f"Error running tool '{tool.name}': {exc}",
+            returncode=-1,
+        )
+
+
+def help_text(tool: CliTool, timeout=DEFAULT_TIMEOUT) -> str:
+    """Fetch --help stdout for a tool."""
+    result = run_tool(tool, ["--help"], timeout=timeout)
+    return result.observation
+
+
+def _run_one_command(
+    registry: dict[str, CliTool], argv: list[str], timeout
+) -> ToolResult:
+    if not argv:
+        return ToolResult(name="", error="Error: empty command", returncode=-1)
+    name = argv[0]
+    tool = registry.get(name)
+    if tool is None:
+        available = ", ".join(registry) or "(none)"
+        return ToolResult(
+            name=name,
+            command=argv,
+            error=f"Error: unknown tool '{name}'. Available: {available}",
+            returncode=-1,
+        )
+    return run_tool(tool, argv[1:], timeout=timeout, command=argv)
+
+
+def run_many(
+    registry: dict[str, CliTool],
+    commands: list[list[str]],
+    timeout=DEFAULT_TIMEOUT,
+) -> list[ToolResult]:
+    """Run parsed commands; concurrent when there is more than one."""
+    if not commands:
+        return []
+    if len(commands) == 1:
+        return [_run_one_command(registry, commands[0], timeout)]
+
+    results: list[ToolResult | None] = [None] * len(commands)
+    with ThreadPoolExecutor(max_workers=len(commands)) as pool:
+        futures = {
+            pool.submit(_run_one_command, registry, cmd, timeout): i
+            for i, cmd in enumerate(commands)
+        }
+        for fut in as_completed(futures):
+            results[futures[fut]] = fut.result()
+    return list(results)  # type: ignore[arg-type]
+
+
+def format_observations(results: list[ToolResult]) -> str:
+    """Format subprocess results for the conversation (fed back to the model)."""
+    blocks = []
+    for r in results:
+        display = shlex.join(r.command) if r.command else (r.name or "?")
+        blocks.append(f"$ {display}\n{r.observation}")
+    return "\n\n".join(blocks)

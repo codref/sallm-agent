@@ -12,7 +12,7 @@ from .tools import CHAT_TOOLS, reset_dig_state
 
 app = typer.Typer(
     name="sallm",
-    help="Minimal tool-calling agent over LiteLLM / Ollama.",
+    help="Minimal CLI-tool agent over LiteLLM / Ollama.",
     add_completion=False,
     no_args_is_help=True,
 )
@@ -21,7 +21,7 @@ console = Console()
 
 @app.callback()
 def _root():
-    """Minimal tool-calling agent over LiteLLM / Ollama."""
+    """Minimal CLI-tool agent over LiteLLM / Ollama."""
     pass
 
 
@@ -46,12 +46,6 @@ def _print_history(agent):
     table.add_column("preview")
     for i, msg in enumerate(agent.messages):
         content = msg.get("content") or ""
-        if not content and msg.get("tool_calls"):
-            names = []
-            for tc in msg["tool_calls"]:
-                fn = tc.get("function") or {}
-                names.append(fn.get("name") or "?")
-            content = f"tool_calls: {', '.join(names)}"
         preview = content.replace("\n", " ")
         if len(preview) > 60:
             preview = preview[:57] + "..."
@@ -61,41 +55,15 @@ def _print_history(agent):
 
 def _print_steps(steps):
     for i, step in enumerate(steps, 1):
-        if step.get("kind") == "decide":
-            use = step.get("use_tools")
-            lines = [f"use_tools = [bold]{use}[/]"]
-            if step.get("tools") is not None:
-                lines.append(f"tools = {step.get('tools')}")
-            if step.get("raw"):
-                lines.append(f"[dim]{step['raw']}[/]")
-            console.print(
-                Panel(
-                    "\n".join(lines),
-                    title="decide",
-                    border_style="yellow",
-                )
-            )
-            continue
-
         if step.get("kind") == "action":
             calls = step.get("tool_calls") or []
-            if not calls and step.get("action"):
-                calls = [
-                    {
-                        "action": step.get("action"),
-                        "action_input": step.get("action_input"),
-                        "observation": step.get("observation"),
-                        "intermediate": step.get("intermediate"),
-                    }
-                ]
             for tc in calls:
                 tag = " [intermediate]" if tc.get("intermediate") else ""
                 obs = escape(str(tc.get("observation") or ""))
                 args = escape(str(tc.get("action_input") or ""))
                 name = escape(str(tc.get("action") or ""))
                 body = (
-                    f"[bold]name[/]   {name}{escape(tag)}\n"
-                    f"[bold]args[/]   {args}\n"
+                    f"[bold]cmd[/]    {name} {args}{escape(tag)}\n"
                     f"[bold]result[/] {obs}"
                 )
                 console.print(
@@ -165,7 +133,7 @@ def chat(
     ),
     system: str = typer.Option(None, "--system", "-s", help="Extra system prompt"),
     max_steps: int = typer.Option(
-        5, "--max-steps", help="Max native tool rounds per turn"
+        5, "--max-steps", help="Max tool rounds per turn"
     ),
     multi_step: bool = typer.Option(
         True,
@@ -187,7 +155,7 @@ def chat(
     console.print(
         Panel(
             f"[bold]sallm[/] chat\nmodel: [cyan]{model}[/]\napi_base: [cyan]{api_base}[/]\n"
-            f"tools: [cyan]{tool_names}[/]\n"
+            f"tools: [cyan]{tool_names}[/] (CLI subprocesses)\n"
             f"multi_step: [cyan]{multi_step}[/]  max_steps: [cyan]{max_steps}[/]\n"
             "type /help for commands",
             border_style="green",
