@@ -1,3 +1,5 @@
+import secrets
+
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
@@ -6,7 +8,14 @@ from rich.panel import Panel
 from rich.table import Table
 
 from sallm import Agent
+from sallm.context import MaxMessages, SummarizeOverflow
+from sallm.lance_store import LanceStore
+from sallm.llm import complete
 from sallm.messages import DEFAULT_API_BASE, DEFAULT_MODEL
+from sallm.retrieve import CompactAndRetrieve, SCOPE_ALL, SCOPE_SESSION
+from sallm.trace import Tracer, jsonl_sink, multi_sink, otlp_http_sink
+from sallm.trace import DEFAULT_TRUNCATE
+from sallm.prom import SessionMetrics
 
 from .tools import CHAT_TOOLS, reset_dig_state
 
@@ -17,6 +26,23 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+CONTEXT_NONE = "none"
+CONTEXT_MAX_MESSAGES = "max-messages"
+CONTEXT_SUMMARIZE = "summarize"
+CONTEXT_MAX_RETRIEVE = "max-messages+retrieve"
+CONTEXT_SUM_RETRIEVE = "summarize+retrieve"
+CONTEXT_CHOICES = (
+    CONTEXT_NONE,
+    CONTEXT_MAX_MESSAGES,
+    CONTEXT_SUMMARIZE,
+    CONTEXT_MAX_RETRIEVE,
+    CONTEXT_SUM_RETRIEVE,
+)
+
+DEFAULT_EMBEDDING_MODEL = "ollama/qwen3-embedding:0.6b"
+DEFAULT_EMBEDDING_DIMENSIONS = 1024
+DEFAULT_LANCEDB_PATH = ".sallm-lancedb"
 
 
 @app.callback()
@@ -29,8 +55,9 @@ def _print_help():
     console.print(
         Panel(
             "[bold]/help[/]  this help\n"
-            "[bold]/clear[/]  reset conversation\n"
+            "[bold]/clear[/]  reset conversation (+ this session memory)\n"
             "[bold]/history[/]  show message roles + lengths\n"
+            "[bold]/memory session|all[/]  retrieval scope guardrail\n"
             "[bold]/quit[/]  exit",
             title="commands",
             border_style="dim",
@@ -122,7 +149,183 @@ def _print_metrics(metrics):
     table.add_row("total tokens", str(metrics.get("total_tokens", 0)))
     table.add_row("elapsed", f"{metrics.get('elapsed_ms', 0):.1f} ms")
     table.add_row("context msgs", str(metrics.get("context_messages", 0)))
+    if "prompt_messages" in metrics:
+        table.add_row("prompt msgs", str(metrics.get("prompt_messages", 0)))
     console.print(Panel(table, title="metrics", border_style="cyan"))
+
+
+def _build_trace(trace_path, otlp_url, debug=False, truncate=512, metrics_port=0):
+    sinks = []
+    if trace_path:
+        sinks.append(jsonl_sink(trace_path))
+    if otlp_url:
+        sinks.append(otlp_http_sink(otlp_url))
+    if not sinks and not metrics_port:
+        return None
+    emit = (lambda _event: None)
+    if sinks:
+        emit = sinks[0] if len(sinks) == 1 else multi_sink(*sinks)
+    tracer = Tracer(emit, debug=debug, truncate=truncate)
+    if metrics_port:
+        metrics = SessionMetrics(tracer.session_id)
+        metrics.start_server(port=int(metrics_port))
+        tracer.metrics = metrics
+    return tracer
+
+
+def _make_summarize_fn(model, api_base):
+    def summarize(text: str) -> str:
+        result = complete(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Summarize the conversation briefly. "
+                        "Keep all key facts, names, numbers, and codes.\n\n" + text
+                    ),
+                }
+            ],
+            api_base=api_base,
+        )
+        return result.get("content") or ""
+
+    return summarize
+
+
+def _make_embed_fn(model, api_base, dimensions: int):
+    def embed(text: str) -> list[float]:
+        from litellm import embedding
+
+        response = embedding(
+            model=model,
+            input=[text or ""],
+            api_base=api_base,
+        )
+        data = response.data[0]
+        vec = data.get("embedding") if isinstance(data, dict) else data["embedding"]
+        vec = list(vec)
+        if len(vec) != dimensions:
+            raise ValueError(
+                f"embedding length {len(vec)} != --embedding-dimensions {dimensions}"
+            )
+        return [float(x) for x in vec]
+
+    return embed
+
+
+def _session_id(tracer) -> str:
+    if tracer is not None:
+        return tracer.session_id
+    return secrets.token_hex(8)
+
+
+def _build_compactor(
+    kind,
+    *,
+    model,
+    api_base,
+    max_context_messages,
+    context_threshold,
+    context_keep_last,
+):
+    if kind in (CONTEXT_MAX_MESSAGES, CONTEXT_MAX_RETRIEVE):
+        n = 40 if max_context_messages is None else max_context_messages
+        return MaxMessages(n), f"MaxMessages({n})"
+    if kind in (CONTEXT_SUMMARIZE, CONTEXT_SUM_RETRIEVE):
+        threshold = 2000 if context_threshold is None else context_threshold
+        keep_last = 10 if context_keep_last is None else context_keep_last
+        opt = SummarizeOverflow(
+            threshold=threshold,
+            keep_last=keep_last,
+            summarize_fn=_make_summarize_fn(model, api_base),
+        )
+        return opt, f"SummarizeOverflow(threshold={threshold}, keep_last={keep_last})"
+    return None, ""
+
+
+def _build_context(
+    kind,
+    *,
+    model,
+    api_base,
+    max_context_messages,
+    context_threshold,
+    context_keep_last,
+    session_id=None,
+    lancedb_path=DEFAULT_LANCEDB_PATH,
+    retrieve_k=4,
+    embedding_model=DEFAULT_EMBEDDING_MODEL,
+    embedding_dimensions=DEFAULT_EMBEDDING_DIMENSIONS,
+    chunk_tokens=512,
+    chunk_overlap_tokens=64,
+    memory_scope=SCOPE_SESSION,
+):
+    """Build a context optimizer for the chat CLI, or None."""
+    if kind is None or kind == CONTEXT_NONE:
+        return None, ""
+
+    if kind in (CONTEXT_MAX_MESSAGES, CONTEXT_SUMMARIZE):
+        return _build_compactor(
+            kind,
+            model=model,
+            api_base=api_base,
+            max_context_messages=max_context_messages,
+            context_threshold=context_threshold,
+            context_keep_last=context_keep_last,
+        )
+
+    if kind in (CONTEXT_MAX_RETRIEVE, CONTEXT_SUM_RETRIEVE):
+        compactor, c_label = _build_compactor(
+            kind,
+            model=model,
+            api_base=api_base,
+            max_context_messages=max_context_messages,
+            context_threshold=context_threshold,
+            context_keep_last=context_keep_last,
+        )
+        store = LanceStore(
+            lancedb_path,
+            embed_fn=_make_embed_fn(embedding_model, api_base, embedding_dimensions),
+            dimensions=embedding_dimensions,
+        )
+        facade = CompactAndRetrieve(
+            compactor,
+            store,
+            session_id=session_id or secrets.token_hex(8),
+            k=retrieve_k,
+            chunk_tokens=chunk_tokens,
+            chunk_overlap_tokens=chunk_overlap_tokens,
+            memory_scope=memory_scope,
+        )
+        label = (
+            f"CompactAndRetrieve({c_label}, LanceStore, "
+            f"scope={facade.memory_scope}, k={retrieve_k}, "
+            f"embed={embedding_model}/{embedding_dimensions})"
+        )
+        return facade, label
+
+    raise typer.BadParameter(
+        f"unknown context optimizer {kind!r}; choose from {', '.join(CONTEXT_CHOICES)}"
+    )
+
+
+def iter_prompts(path):
+    """Yield non-empty stripped lines from a script file (one prompt per line)."""
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                yield line
+
+
+def iter_repl():
+    """Yield user lines from the interactive prompt until EOF / Ctrl-C."""
+    while True:
+        try:
+            yield console.input("[bold green]you>[/] ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return
 
 
 @app.command()
@@ -140,8 +343,127 @@ def chat(
         "--multi-step/--no-multi-step",
         help="Allow chained tool rounds within one turn",
     ),
+    script: str = typer.Option(
+        None,
+        "--script",
+        help="Run prompts from a file (one non-empty line = one turn), then exit",
+    ),
+    trace: str = typer.Option(
+        None,
+        "--trace",
+        help="Append OpenTelemetry-shaped JSONL events to this file",
+    ),
+    otlp: str = typer.Option(
+        None,
+        "--otlp",
+        help="POST spans to OTLP/HTTP endpoint (e.g. http://localhost:4318)",
+    ),
+    trace_debug: bool = typer.Option(
+        False,
+        "--trace-debug/--no-trace-debug",
+        help="Store prompt/context/completion text on spans (truncated)",
+    ),
+    trace_truncate: int = typer.Option(
+        DEFAULT_TRUNCATE,
+        "--trace-truncate",
+        help="Max chars per content field (each message/completion); 0 = unlimited",
+    ),
+    metrics_port: int = typer.Option(
+        0,
+        "--metrics-port",
+        help="Expose Prometheus /metrics on this port (0 = off); scrape from Docker via host.docker.internal",
+    ),
+    context: str = typer.Option(
+        CONTEXT_NONE,
+        "--context",
+        help=(
+            "Context optimizer: none | max-messages | summarize | "
+            "max-messages+retrieve | summarize+retrieve"
+        ),
+    ),
+    max_context_messages: int | None = typer.Option(
+        None,
+        "--max-context-messages",
+        help="For max-messages[*]: keep system + last N messages (default 40)",
+    ),
+    context_threshold: int | None = typer.Option(
+        None,
+        "--context-threshold",
+        help="For summarize[*]: overflow token budget before summarizing (default 2000)",
+    ),
+    context_keep_last: int | None = typer.Option(
+        None,
+        "--context-keep-last",
+        help="For summarize[*]: recent messages kept verbatim (default 10)",
+    ),
+    lancedb_path: str = typer.Option(
+        DEFAULT_LANCEDB_PATH,
+        "--lancedb-path",
+        help="Local LanceDB directory for +retrieve recipes",
+    ),
+    retrieve_k: int = typer.Option(
+        4, "--retrieve-k", help="Top-k chunks to inject for +retrieve"
+    ),
+    embedding_model: str = typer.Option(
+        DEFAULT_EMBEDDING_MODEL,
+        "--embedding-model",
+        help="LiteLLM embedding model id (Ollama)",
+    ),
+    embedding_dimensions: int = typer.Option(
+        DEFAULT_EMBEDDING_DIMENSIONS,
+        "--embedding-dimensions",
+        help="Expected embedding vector length (must match model)",
+    ),
+    chunk_tokens: int = typer.Option(
+        512, "--chunk-tokens", help="Max estimated tokens per memory chunk"
+    ),
+    chunk_overlap_tokens: int = typer.Option(
+        64, "--chunk-overlap-tokens", help="Overlap between memory chunks"
+    ),
+    memory_scope: str = typer.Option(
+        SCOPE_SESSION,
+        "--memory-scope",
+        help="Retrieval guardrail: session (default) | all",
+    ),
 ):
     """Interactive chat REPL for testing the agent."""
+    kind = (context or CONTEXT_NONE).strip().lower()
+    if kind not in CONTEXT_CHOICES:
+        raise typer.BadParameter(
+            f"unknown --context {context!r}; choose from {', '.join(CONTEXT_CHOICES)}"
+        )
+    # Backward-compatible: --max-context-messages alone implies max-messages.
+    if kind == CONTEXT_NONE and max_context_messages is not None:
+        kind = CONTEXT_MAX_MESSAGES
+
+    scope = (memory_scope or SCOPE_SESSION).strip().lower()
+    if scope not in (SCOPE_SESSION, SCOPE_ALL):
+        raise typer.BadParameter("--memory-scope must be session or all")
+
+    tracer = _build_trace(
+        trace,
+        otlp,
+        debug=trace_debug,
+        truncate=trace_truncate,
+        metrics_port=metrics_port,
+    )
+    sid = _session_id(tracer)
+    ctx, context_label = _build_context(
+        kind,
+        model=model,
+        api_base=api_base,
+        max_context_messages=max_context_messages,
+        context_threshold=context_threshold,
+        context_keep_last=context_keep_last,
+        session_id=sid,
+        lancedb_path=lancedb_path,
+        retrieve_k=retrieve_k,
+        embedding_model=embedding_model,
+        embedding_dimensions=embedding_dimensions,
+        chunk_tokens=chunk_tokens,
+        chunk_overlap_tokens=chunk_overlap_tokens,
+        memory_scope=scope,
+    )
     agent = Agent(
         model=model,
         api_base=api_base,
@@ -149,34 +471,57 @@ def chat(
         max_steps=max_steps,
         multi_step=multi_step,
         tools=CHAT_TOOLS,
+        trace=tracer,
+        context=ctx,
     )
 
     tool_names = ", ".join(CHAT_TOOLS) or "(none)"
+    trace_bits = []
+    if trace:
+        trace_bits.append(f"jsonl={trace}")
+    if otlp:
+        trace_bits.append(f"otlp={otlp}")
+    if tracer is not None:
+        trace_bits.append(f"session={tracer.session_id}")
+        if trace_debug:
+            trace_bits.append(f"debug truncate={trace_truncate}")
+        if metrics_port:
+            trace_bits.append(f"metrics=:{metrics_port}/metrics")
+    else:
+        trace_bits.append(f"session={sid}")
+    trace_line = (
+        f"trace: [cyan]{', '.join(trace_bits)}[/]\n" if trace_bits else ""
+    )
+    script_line = f"script: [cyan]{script}[/]\n" if script else ""
+    context_line = (
+        f"context: [cyan]{context_label}[/]\n" if context_label else ""
+    )
     console.print(
         Panel(
             f"[bold]sallm[/] chat\nmodel: [cyan]{model}[/]\napi_base: [cyan]{api_base}[/]\n"
             f"tools: [cyan]{tool_names}[/] (CLI subprocesses)\n"
             f"multi_step: [cyan]{multi_step}[/]  max_steps: [cyan]{max_steps}[/]\n"
+            f"{script_line}{context_line}{trace_line}"
             "type /help for commands",
             border_style="green",
         )
     )
 
-    while True:
-        try:
-            line = console.input("[bold green]you>[/] ").strip()
-        except (EOFError, KeyboardInterrupt):
-            console.print("\nbye")
-            break
+    prompts = iter_prompts(script) if script else iter_repl()
+    for line in prompts:
+        if script:
+            console.print(f"[bold green]you>[/] {line}")
 
         if not line:
             continue
 
         if line.startswith("/"):
-            cmd = line.split(None, 1)[0].lower()
+            parts = line.split(None, 1)
+            cmd = parts[0].lower()
+            arg = parts[1].strip().lower() if len(parts) > 1 else ""
             if cmd in ("/quit", "/exit", "/q"):
                 console.print("bye")
-                break
+                return
             if cmd == "/help":
                 _print_help()
                 continue
@@ -187,6 +532,22 @@ def chat(
                 continue
             if cmd == "/history":
                 _print_history(agent)
+                continue
+            if cmd == "/memory":
+                facade = agent.context
+                if not isinstance(facade, CompactAndRetrieve):
+                    console.print(
+                        "[red]/memory requires a +retrieve context optimizer[/]"
+                    )
+                    continue
+                if arg not in (SCOPE_SESSION, SCOPE_ALL):
+                    console.print(
+                        f"[dim]memory scope:[/] {facade.memory_scope}  "
+                        f"(use /memory session|all)"
+                    )
+                    continue
+                facade.memory_scope = arg
+                console.print(f"[dim]memory scope:[/] {facade.memory_scope}")
                 continue
             console.print(f"[red]unknown command:[/] {cmd}  (try /help)")
             continue
@@ -207,6 +568,8 @@ def chat(
             )
         )
         _print_metrics(result.get("metrics") or {})
+
+    console.print("bye")
 
 
 if __name__ == "__main__":

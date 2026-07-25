@@ -1,5 +1,7 @@
 """Agent that drives CLI tools via ```run blocks (no native JSON tool calls)."""
 
+import time
+
 from . import metrics as metrics_mod
 from .llm import complete
 from .messages import DEFAULT_API_BASE, DEFAULT_MODEL, assistant, system, user
@@ -71,6 +73,8 @@ class Agent:
         system=None,
         max_steps=5,
         multi_step=True,
+        trace=None,
+        context=None,
     ):
         self.model = model or DEFAULT_MODEL
         self.api_base = api_base or DEFAULT_API_BASE
@@ -78,6 +82,8 @@ class Agent:
         self.max_steps = max_steps
         self.multi_step = multi_step
         self.system = system
+        self.trace = trace  # Tracer | None — never touch when None
+        self.context = context  # optimizer | None — prepare() view for LLM
         self.messages = []
         self._ensure_system()
 
@@ -101,30 +107,89 @@ class Agent:
     def clear(self):
         self.messages = []
         self._ensure_system()
+        ctx = self.context
+        if ctx is not None:
+            on_clear = getattr(ctx, "on_clear", None)
+            if on_clear is not None:
+                on_clear()
+
+    def _prompt_messages(self, messages):
+        ctx = self.context
+        if ctx is None:
+            return messages
+        return ctx.prepare(messages)
 
     def _complete(self, messages, turn_metrics):
+        prompt = self._prompt_messages(messages)
         result = complete(
             model=self.model,
-            messages=messages,
+            messages=prompt,
             api_base=self.api_base,
         )
         step_metrics = metrics_mod.from_llm_result(result)
         turn_metrics = metrics_mod.add_usage(turn_metrics, step_metrics)
+        tr = self.trace
+        if tr is not None:
+            tr.llm(
+                model=self.model,
+                metrics=step_metrics,
+                content=result.get("content") or "",
+                reasoning=result.get("reasoning"),
+                messages=prompt,
+            )
         return result, step_metrics, turn_metrics
 
-    def _finish(self, answer, steps, turn_metrics):
+    def _run_tools(self, commands):
+        tr = self.trace
+        if tr is None:
+            return run_many(self.tools, commands)
+        started = time.perf_counter()
+        results = run_many(self.tools, commands)
+        batch_ms = (time.perf_counter() - started) * 1000
+        per = batch_ms / max(len(results), 1)
+        for r in results:
+            tr.tool(
+                name=r.name,
+                command=r.command,
+                observation=r.observation,
+                stdout=r.stdout,
+                stderr=r.stderr,
+                returncode=r.returncode,
+                intermediate=r.intermediate,
+                elapsed_ms=per,
+            )
+        return results
+
+    def _finish(self, answer, steps, turn_metrics, stopped=None):
         self.messages.append(assistant(answer))
-        return {
+        prompt_view = self._prompt_messages(self.messages)
+        summary = metrics_mod.summarize(
+            turn_metrics,
+            context_messages=len(self.messages),
+            prompt_messages=len(prompt_view),
+        )
+        tr = self.trace
+        if tr is not None:
+            tr.turn_end(
+                answer=answer,
+                metrics=summary,
+                messages=self.messages,
+                stopped=stopped,
+            )
+        out = {
             "answer": answer,
             "steps": steps,
-            "metrics": metrics_mod.summarize(
-                turn_metrics,
-                context_messages=len(self.messages),
-            ),
+            "metrics": summary,
         }
+        if stopped:
+            out["stopped"] = stopped
+        return out
 
     def _inject_continue_nudge(self):
         self.messages.append(user(CONTINUE_NUDGE))
+        tr = self.trace
+        if tr is not None:
+            tr.nudge(CONTINUE_NUDGE)
 
     def ask(self, user_text):
         self.messages.append(user(user_text))
@@ -132,6 +197,10 @@ class Agent:
         turn_metrics = metrics_mod.empty_usage()
         acted = False
         awaiting_continue = False
+
+        tr = self.trace
+        if tr is not None:
+            tr.turn_start(user_text, self.messages, model=self.model)
 
         for _ in range(self.max_steps):
             result, step_metrics, turn_metrics = self._complete(
@@ -142,7 +211,7 @@ class Agent:
 
             if commands:
                 self.messages.append(assistant(content))
-                results = run_many(self.tools, commands)
+                results = self._run_tools(commands)
                 observation = format_observations(results)
                 self.messages.append(user(RESULTS_PREFIX + observation))
                 pending = any(r.intermediate for r in results)
@@ -191,6 +260,8 @@ class Agent:
                         "metrics": step_metrics,
                     }
                 )
+                if tr is not None:
+                    tr.rejected(content, nudge=EARLY_ANSWER_NUDGE)
                 continue
 
             steps.append(
@@ -214,7 +285,7 @@ class Agent:
             if parse_run_blocks(answer):
                 # One last execute, then ask again without tools expectation.
                 self.messages.append(assistant(answer))
-                results = run_many(self.tools, parse_run_blocks(answer))
+                results = self._run_tools(parse_run_blocks(answer))
                 self.messages.append(
                     user(RESULTS_PREFIX + format_observations(results))
                 )
@@ -247,13 +318,8 @@ class Agent:
                     "metrics": step_metrics,
                 }
             )
-            out = self._finish(answer, steps, turn_metrics)
-            out["stopped"] = "max_steps"
-            return out
+            return self._finish(answer, steps, turn_metrics, stopped="max_steps")
 
         fallback = "(no tool call produced)"
         steps.append({"kind": "final", "raw": fallback, "answer": fallback})
-        return {
-            **self._finish(fallback, steps, turn_metrics),
-            "stopped": "max_steps",
-        }
+        return self._finish(fallback, steps, turn_metrics, stopped="max_steps")

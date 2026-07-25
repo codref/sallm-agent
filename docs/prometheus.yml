@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: sallm
+    static_configs:
+      # CLI runs on the host; compose maps host-gateway → host.docker.internal
+      - targets: ["host.docker.internal:9464"]

@@ -1,0 +1,22 @@
+apiVersion: 1
+datasources:
+  - name: Tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    uid: tempo
+    jsonData:
+      httpMethod: GET
+      tracesToLogsV2:
+        datasourceUid: ""
+
+  # Name must be lowercase "prometheus" — Grafana resolves some panels by name.
+  - name: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    uid: prometheus
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 5s

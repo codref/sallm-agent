@@ -1,0 +1,252 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Input tokens (session)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(sallm_tokens_input_total{session_id=~\"$session_id\"})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Output tokens (session)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(sallm_tokens_output_total{session_id=~\"$session_id\"})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Turns",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(sallm_turns_total{session_id=~\"$session_id\"})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Last turn tokens",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(sallm_last_turn_total_tokens{session_id=~\"$session_id\"})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "stacking": { "mode": "normal", "group": "A" },
+            "barAlignment": 0
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
+      "id": 9,
+      "title": "Tokens per interval (≈ per turn)",
+      "description": "increase() of counters over the dashboard interval. With scrape 5s, each ask() usually appears as one bar.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(increase(sallm_tokens_input_total{session_id=~\"$session_id\"}[$__interval]))",
+          "legendFormat": "input",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(sallm_tokens_output_total{session_id=~\"$session_id\"}[$__interval]))",
+          "legendFormat": "output",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 80 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 4 },
+      "id": 10,
+      "title": "Turn token distribution (histogram)",
+      "description": "How many ask() turns fell into each token bucket (input / output / total).",
+      "type": "histogram",
+      "options": {
+        "bucketCount": 10,
+        "combine": true
+      },
+      "targets": [
+        {
+          "expr": "sum by (le) (increase(sallm_turn_total_tokens_bucket{session_id=~\"$session_id\"}[$__range]))",
+          "legendFormat": "total",
+          "format": "heatmap",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (le) (increase(sallm_turn_input_tokens_bucket{session_id=~\"$session_id\"}[$__range]))",
+          "legendFormat": "input",
+          "format": "heatmap",
+          "refId": "B"
+        },
+        {
+          "expr": "sum by (le) (increase(sallm_turn_output_tokens_bucket{session_id=~\"$session_id\"}[$__range]))",
+          "legendFormat": "output",
+          "format": "heatmap",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "id": 5,
+      "title": "Tokens (cumulative)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(sallm_tokens_input_total{session_id=~\"$session_id\"})",
+          "legendFormat": "input",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(sallm_tokens_output_total{session_id=~\"$session_id\"})",
+          "legendFormat": "output",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(sallm_tokens_total{session_id=~\"$session_id\"})",
+          "legendFormat": "total",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "id": 6,
+      "title": "LLM elapsed (cumulative ms)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(sallm_llm_elapsed_ms_sum{session_id=~\"$session_id\"})",
+          "legendFormat": "llm ms",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 50 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+      "id": 7,
+      "title": "Tool calls",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (tool, status) (sallm_tool_calls_total{session_id=~\"$session_id\"})",
+          "legendFormat": "{{tool}} {{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
+      "id": 8,
+      "title": "Traces for session (Tempo)",
+      "type": "traces",
+      "targets": [
+        {
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"sallm\" && span.session.id =~ \"$session_id\" }",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["sallm"],
+  "templating": {
+    "list": [
+      {
+        "current": { "text": ".*", "value": ".*" },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(sallm_turns_total, session_id)",
+        "includeAll": true,
+        "allValue": ".*",
+        "label": "session_id",
+        "name": "session_id",
+        "query": { "query": "label_values(sallm_turns_total, session_id)", "refId": "PrometheusVariableQueryEditor-VariableQuery" },
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "title": "sallm session",
+  "uid": "sallm-session",
+  "version": 2
+}

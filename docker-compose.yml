@@ -1,0 +1,34 @@
+services:
+  tempo:
+    image: grafana/tempo:2.7.1
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./docs/tempo.yaml:/etc/tempo.yaml:ro
+    ports:
+      - "4318:4318" # OTLP HTTP — sallm --otlp
+      - "3200:3200" # Tempo API
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./docs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    depends_on:
+      - tempo
+      - prometheus
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./docs/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - ./docs/grafana-dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
+      - ./docs/grafana-dashboard-sallm.json:/var/lib/grafana/dashboards/sallm.json:ro
+    ports:
+      - "3000:3000"

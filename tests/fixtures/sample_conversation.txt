@@ -1,0 +1,2 @@
+Use the calc tool for 2**10 and tell me the number.
+Now use echo --text done and confirm you printed done.

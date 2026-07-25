@@ -18,6 +18,7 @@ sallm-dig = "sallm.toolapps.dig:main"
 
 [project.optional-dependencies]
 dev = ["pytest"]
+memory = ["lancedb"]
 
 [build-system]
 requires = ["hatchling"]
