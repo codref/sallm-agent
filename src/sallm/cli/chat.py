@@ -14,7 +14,6 @@ from rich.panel import Panel
 from rich.table import Table
 
 from sallm import Agent
-from sallm.consciousness import ToolAdvisor
 from sallm.context import MaxMessages, SummarizeOverflow
 from sallm.llm import complete
 from sallm.messages import DEFAULT_API_BASE, DEFAULT_MODEL
@@ -36,9 +35,7 @@ CONTEXT_MAX_MESSAGES = "max-messages"
 CONTEXT_SUMMARIZE = "summarize"
 CONTEXT_CHOICES = (CONTEXT_NONE, CONTEXT_MAX_MESSAGES, CONTEXT_SUMMARIZE)
 
-CONSCIOUSNESS_NONE = "none"
-CONSCIOUSNESS_TOOL_ADVISOR = "tool-advisor"
-CONSCIOUSNESS_CHOICES = (CONSCIOUSNESS_NONE, CONSCIOUSNESS_TOOL_ADVISOR)
+_PROMPT_PREVIEW_CHARS = 400
 
 
 @app.callback()
@@ -53,6 +50,9 @@ def _print_help():
             "[bold]/help[/]  this help\n"
             "[bold]/clear[/]  reset conversation (+ dig/memory tool state)\n"
             "[bold]/history[/]  show message roles + lengths\n"
+            "[bold]/prompt[/]  show system prompt (+ last LLM view if any)\n"
+            "[bold]/prompt system[/]  system / templates only\n"
+            "[bold]/prompt last[/]  last messages sent to the model\n"
             "[bold]/quit[/]  exit",
             title="commands",
             border_style="dim",
@@ -73,6 +73,62 @@ def _print_history(agent):
             preview = preview[:57] + "..."
         table.add_row(str(i), msg.get("role", "?"), str(len(content)), preview)
     console.print(table)
+
+
+def _print_last_prompt(agent, *, truncate=_PROMPT_PREVIEW_CHARS):
+    """Show the exact message list last sent to complete()."""
+    msgs = agent.last_prompt
+    if not msgs:
+        console.print("[yellow]no last LLM prompt yet — ask something first[/]")
+        return
+    table = Table(title="last LLM prompt", show_header=True, header_style="bold")
+    table.add_column("#", style="dim", width=4)
+    table.add_column("role", width=10)
+    table.add_column("chars", justify="right", width=8)
+    table.add_column("content")
+    for i, msg in enumerate(msgs):
+        content = msg.get("content") or ""
+        shown = content
+        if truncate > 0 and len(shown) > truncate:
+            shown = shown[: truncate - 3] + "..."
+        table.add_row(
+            str(i),
+            msg.get("role", "?"),
+            str(len(content)),
+            escape(shown),
+        )
+    console.print(table)
+
+
+def _print_prompt_cmd(agent, arg: str | None = None):
+    """Handle /prompt [system|last]."""
+    kind = (arg or "").strip().lower()
+    if kind in ("", "all"):
+        console.print(
+            Panel(
+                escape(agent.prompt.preview()),
+                title="prompt system",
+                border_style="cyan",
+            )
+        )
+        if agent.last_prompt:
+            _print_last_prompt(agent)
+        return
+    if kind == "system":
+        console.print(
+            Panel(
+                escape(agent.prompt.preview()),
+                title="prompt system",
+                border_style="cyan",
+            )
+        )
+        return
+    if kind == "last":
+        _print_last_prompt(agent)
+        return
+    console.print(
+        f"[red]unknown /prompt arg:[/] {kind!r}  (try system|last)"
+    )
 
 
 def _print_steps(steps):
@@ -288,15 +344,15 @@ def chat(
         "--memory-backend",
         help="memory tool backend: file | lance (lance needs --extra memory)",
     ),
-    consciousness: str = typer.Option(
-        CONSCIOUSNESS_NONE,
-        "--consciousness",
-        help="Consciousness loop: none | tool-advisor (system tool advice)",
-    ),
     script: str = typer.Option(
         None,
         "--script",
         help="Run prompts from a file (one non-empty line = one turn), then exit",
+    ),
+    show_prompt: bool = typer.Option(
+        False,
+        "--show-prompt/--no-show-prompt",
+        help="After each turn, print the last LLM prompt view",
     ),
     trace: str = typer.Option(
         None,
@@ -357,13 +413,6 @@ def chat(
     if backend not in ("file", "lance"):
         raise typer.BadParameter("--memory-backend must be file or lance")
 
-    consc_kind = (consciousness or CONSCIOUSNESS_NONE).strip().lower()
-    if consc_kind not in CONSCIOUSNESS_CHOICES:
-        raise typer.BadParameter(
-            f"unknown --consciousness {consciousness!r}; "
-            f"choose from {', '.join(CONSCIOUSNESS_CHOICES)}"
-        )
-
     tracer = _build_trace(
         trace,
         otlp,
@@ -395,11 +444,6 @@ def chat(
         context_threshold=context_threshold,
         context_keep_last=context_keep_last,
     )
-    consc = None
-    consc_label = ""
-    if consc_kind == CONSCIOUSNESS_TOOL_ADVISOR:
-        consc = ToolAdvisor(model=model, api_base=api_base)
-        consc_label = "ToolAdvisor"
 
     agent = Agent(
         model=model,
@@ -410,7 +454,6 @@ def chat(
         tools=registry,
         trace=tracer,
         context=ctx,
-        consciousness=consc,
     )
 
     tool_label = ", ".join(registry) or "(none)"
@@ -434,8 +477,8 @@ def chat(
     context_line = (
         f"context: [cyan]{context_label}[/]\n" if context_label else ""
     )
-    consc_line = (
-        f"consciousness: [cyan]{consc_label}[/]\n" if consc_label else ""
+    show_prompt_line = (
+        "show_prompt: [cyan]on[/]\n" if show_prompt else ""
     )
     mem_line = ""
     if "memory" in registry:
@@ -447,7 +490,7 @@ def chat(
             f"[bold]sallm[/] chat\nmodel: [cyan]{model}[/]\napi_base: [cyan]{api_base}[/]\n"
             f"tools: [cyan]{tool_label}[/] (CLI subprocesses)\n"
             f"multi_step: [cyan]{multi_step}[/]  max_steps: [cyan]{max_steps}[/]\n"
-            f"{script_line}{context_line}{consc_line}{mem_line}{trace_line}"
+            f"{script_line}{context_line}{show_prompt_line}{mem_line}{trace_line}"
             "type /help for commands",
             border_style="green",
         )
@@ -465,6 +508,7 @@ def chat(
         if line.startswith("/"):
             parts = line.split(None, 1)
             cmd = parts[0].lower()
+            arg = parts[1] if len(parts) > 1 else None
             if cmd in ("/quit", "/exit", "/q"):
                 console.print("bye")
                 return
@@ -481,29 +525,21 @@ def chat(
             if cmd == "/history":
                 _print_history(agent)
                 continue
+            if cmd == "/prompt":
+                _print_prompt_cmd(agent, arg)
+                continue
             console.print(f"[red]unknown command:[/] {cmd}  (try /help)")
             continue
 
-        status = (
-            "[dim]consciousness + thinking…[/]"
-            if agent.consciousness
-            else "[dim]thinking…[/]"
-        )
-        with console.status(status, spinner="dots"):
+        with console.status("[dim]thinking…[/]", spinner="dots"):
             try:
                 result = agent.ask(line)
             except Exception as exc:
                 console.print(f"[red]error:[/] {exc}")
                 continue
 
-        if result.get("consciousness"):
-            console.print(
-                Panel(
-                    escape(result["consciousness"]),
-                    title="consciousness",
-                    border_style="dim",
-                )
-            )
+        if show_prompt:
+            _print_last_prompt(agent)
         _print_steps(result.get("steps") or [])
         console.print(
             Panel(

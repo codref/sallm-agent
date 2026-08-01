@@ -1,19 +1,21 @@
 """Agent: LLM turns + ```run tool execution (observations land in the transcript).
 
+Owns: ask() loop, message transcript, tool rounds.
+Uses Prompt for all wording; last_prompt is the troubleshoot hook (exact LLM view).
+Does not embed or index — tools are subprocess CLIs; context only reshapes the prompt view.
+
 Tool I/O contract:
   - Model emits fenced ```run blocks → parse_run_blocks → run_many
-  - Observations append as user messages prefixed with RESULTS_PREFIX
+  - Observations append as user messages prefixed with Prompt.RESULTS_PREFIX
   - stdout starting with [intermediate] triggers a continue nudge
-Context optimizers (optional) only reshape the prompt view; they do not run tools.
-Consciousness loops (optional) inject ephemeral system addenda (tool advice only).
 """
 
 import time
 
 from . import metrics as metrics_mod
-from .consciousness import join_addenda, normalize_consciousness
 from .llm import complete
 from .messages import DEFAULT_API_BASE, DEFAULT_MODEL, assistant, system, user
+from .prompt import Prompt
 from .tools import (
     format_observations,
     normalize_registry,
@@ -21,59 +23,6 @@ from .tools import (
     run_many,
     tool_descriptions,
 )
-
-MULTI_STEP_ON = """Multi-step mode is ON.
-If the user asked for several sequential operations, run one tool (or one batch) at a time.
-After each tool result, either emit another ```run block or answer in plain text when finished.
-If a tool result starts with [intermediate], the work is not done — run that tool again.
-Do not invent tool output."""
-
-MULTI_STEP_OFF = """Multi-step mode is OFF.
-Prefer a single ```run block when possible.
-Exception: if a tool result starts with [intermediate], you must run that tool again
-until you get a final (non-intermediate) result — then answer in plain text.
-Do not invent tool output."""
-
-CONTINUE_NUDGE = (
-    "The previous tool result was intermediate (not finished). "
-    "Emit another ```run block to call the same or next required tool. "
-    "Do not give a final answer yet."
-)
-
-EARLY_ANSWER_NUDGE = (
-    "You replied with text before the tool work finished. "
-    "An intermediate tool result is still pending. "
-    "Emit a ```run block now. Do not answer the user yet."
-)
-
-SYSTEM = """You are a helpful assistant.
-
-Default behavior: answer the user directly in plain text.
-Do not run tools for greetings, identity questions, opinions, explanations,
-or anything you can answer from your own knowledge.
-
-When a tool-advice section is appended below, treat it as guidance for
-this turn: prefer the named tools when relevant; still do not invent tool output.
-
-Tools are small command-line programs. To use them, reply with a fenced run block
-containing one command per line (shell-style flags, no JSON):
-
-```run
-toolname --flag value
-another --flag value
-```
-
-Multiple lines run as concurrent processes in one step.
-If you are unsure of a tool's flags, run `toolname --help` inside a ```run block first.
-Never invent tool output. After finished tool results, reply in short plain text.
-
-{multi_step_policy}
-
-Available tools:
-{tools}
-"""
-
-RESULTS_PREFIX = "Tool results:\n"
 
 
 class Agent:
@@ -87,36 +36,31 @@ class Agent:
         multi_step=True,
         trace=None,
         context=None,
-        consciousness=None,
     ):
         self.model = model or DEFAULT_MODEL
         self.api_base = api_base or DEFAULT_API_BASE
         self.tools = normalize_registry(tools)
         self.max_steps = max_steps
         self.multi_step = multi_step
-        self.system = system
+        self.system = system  # optional extra prefix on the system prompt
         self.trace = trace  # Tracer | None — never touch when None
         self.context = context  # optimizer | None — prepare() view for LLM
-        self.consciousness = normalize_consciousness(consciousness)
-        self._turn_addendum = ""  # ephemeral; set per ask()
+        self.prompt = self._build_prompt()
+        self.last_prompt = None  # list[dict] | None — last messages sent to complete()
         self.messages = []
         self._ensure_system()
 
-    def _multi_step_policy(self):
-        return MULTI_STEP_ON if self.multi_step else MULTI_STEP_OFF
-
-    def _base_system_content(self):
-        base = SYSTEM.format(
-            tools=tool_descriptions(self.tools),
-            multi_step_policy=self._multi_step_policy(),
+    def _build_prompt(self) -> Prompt:
+        return Prompt(
+            tools_text=tool_descriptions(self.tools),
+            multi_step=self.multi_step,
+            extra=self.system,
         )
-        if self.system:
-            return self.system.rstrip() + "\n\n" + base
-        return base
 
     def _ensure_system(self):
-        """Keep transcript system message as stable base (no consciousness addenda)."""
-        content = self._base_system_content()
+        """Keep transcript system message aligned with current Prompt.render."""
+        self.prompt = self._build_prompt()
+        content = self.prompt.system()
         if self.messages and self.messages[0].get("role") == "system":
             self.messages[0] = system(content)
         else:
@@ -124,7 +68,7 @@ class Agent:
 
     def clear(self):
         self.messages = []
-        self._turn_addendum = ""
+        self.last_prompt = None
         self._ensure_system()
         ctx = self.context
         if ctx is not None:
@@ -132,22 +76,8 @@ class Agent:
             if on_clear is not None:
                 on_clear()
 
-    def _run_consciousness(self) -> str:
-        parts = []
-        for layer in self.consciousness:
-            advise = getattr(layer, "advise", None)
-            if advise is None:
-                continue
-            part = advise(self.messages, self.tools)
-            if part and str(part).strip():
-                parts.append(str(part).strip())
-        return join_addenda(parts)
-
     def _prompt_messages(self, messages):
         view = list(messages)
-        if self._turn_addendum and view and view[0].get("role") == "system":
-            base = view[0].get("content") or ""
-            view[0] = system(base.rstrip() + "\n\n" + self._turn_addendum)
         ctx = self.context
         if ctx is None:
             return view
@@ -155,6 +85,7 @@ class Agent:
 
     def _complete(self, messages, turn_metrics):
         prompt = self._prompt_messages(messages)
+        self.last_prompt = prompt  # exact payload for /prompt troubleshooting
         result = complete(
             model=self.model,
             messages=prompt,
@@ -194,6 +125,32 @@ class Agent:
             )
         return results
 
+    def _record_action(self, content, result, step_metrics, results):
+        """Append assistant + tool observations to transcript; return step dict."""
+        observation = format_observations(results)
+        self.messages.append(assistant(content))
+        self.messages.append(user(self.prompt.RESULTS_PREFIX + observation))
+        pending = any(r.intermediate for r in results)
+        return {
+            "kind": "action",
+            "raw": content,
+            "reasoning": result.get("reasoning"),
+            "commands": [list(r.command) for r in results],
+            "tool_calls": [
+                {
+                    "action": r.name,
+                    "action_input": " ".join(r.command[1:]),
+                    "observation": r.observation,
+                    "intermediate": r.intermediate,
+                    "returncode": r.returncode,
+                }
+                for r in results
+            ],
+            "observation": observation,
+            "intermediate": pending,
+            "metrics": step_metrics,
+        }
+
     def _finish(self, answer, steps, turn_metrics, stopped=None):
         self.messages.append(assistant(answer))
         prompt_view = self._prompt_messages(self.messages)
@@ -217,15 +174,41 @@ class Agent:
         }
         if stopped:
             out["stopped"] = stopped
-        if self._turn_addendum:
-            out["consciousness"] = self._turn_addendum
         return out
 
     def _inject_continue_nudge(self):
-        self.messages.append(user(CONTINUE_NUDGE))
+        nudge = self.prompt.CONTINUE_NUDGE
+        self.messages.append(user(nudge))
         tr = self.trace
         if tr is not None:
-            tr.nudge(CONTINUE_NUDGE)
+            tr.nudge(nudge)
+
+    def _force_answer_after_tools(self, steps, turn_metrics):
+        """max_steps exhausted after tool use — one more complete; strip trailing runs."""
+        result, step_metrics, turn_metrics = self._complete(
+            self.messages, turn_metrics
+        )
+        answer = result.get("content") or ""
+        # Forced path may still emit ```run — execute once more, then complete again.
+        if parse_run_blocks(answer):
+            results = self._run_tools(parse_run_blocks(answer))
+            steps.append(
+                self._record_action(answer, result, step_metrics, results)
+            )
+            result, step_metrics, turn_metrics = self._complete(
+                self.messages, turn_metrics
+            )
+            answer = result.get("content") or ""
+        steps.append(
+            {
+                "kind": "final",
+                "raw": answer,
+                "answer": answer,
+                "reasoning": result.get("reasoning"),
+                "metrics": step_metrics,
+            }
+        )
+        return self._finish(answer, steps, turn_metrics, stopped="max_steps")
 
     def ask(self, user_text):
         self.messages.append(user(user_text))
@@ -238,10 +221,6 @@ class Agent:
         if tr is not None:
             tr.turn_start(user_text, self.messages, model=self.model)
 
-        self._turn_addendum = self._run_consciousness()
-        if self._turn_addendum and tr is not None:
-            tr.consciousness(self._turn_addendum)
-
         for _ in range(self.max_steps):
             result, step_metrics, turn_metrics = self._complete(
                 self.messages, turn_metrics
@@ -250,37 +229,17 @@ class Agent:
             commands = parse_run_blocks(content) if self.tools else []
 
             if commands:
-                self.messages.append(assistant(content))
                 results = self._run_tools(commands)
-                observation = format_observations(results)
-                self.messages.append(user(RESULTS_PREFIX + observation))
-                pending = any(r.intermediate for r in results)
-                steps.append(
-                    {
-                        "kind": "action",
-                        "raw": content,
-                        "reasoning": result.get("reasoning"),
-                        "commands": [list(r.command) for r in results],
-                        "tool_calls": [
-                            {
-                                "action": r.name,
-                                "action_input": " ".join(r.command[1:]),
-                                "observation": r.observation,
-                                "intermediate": r.intermediate,
-                                "returncode": r.returncode,
-                            }
-                            for r in results
-                        ],
-                        "observation": observation,
-                        "intermediate": pending,
-                        "metrics": step_metrics,
-                    }
-                )
+                step = self._record_action(content, result, step_metrics, results)
+                steps.append(step)
                 acted = True
 
-                if pending:
+                # Intermediate stdout → nudge and keep looping until a final result.
+                if step["intermediate"]:
                     self._inject_continue_nudge()
-                    steps.append({"kind": "nudge", "raw": CONTINUE_NUDGE})
+                    steps.append(
+                        {"kind": "nudge", "raw": self.prompt.CONTINUE_NUDGE}
+                    )
                     awaiting_continue = True
                     continue
 
@@ -289,19 +248,20 @@ class Agent:
                     continue
                 break
 
-            # Plain text reply (no run block).
+            # Plain text while an intermediate result is pending → reject and nudge.
             if awaiting_continue:
-                self.messages.append(user(EARLY_ANSWER_NUDGE))
+                nudge = self.prompt.EARLY_ANSWER_NUDGE
+                self.messages.append(user(nudge))
                 steps.append(
                     {
                         "kind": "rejected",
                         "raw": content,
-                        "nudge": EARLY_ANSWER_NUDGE,
+                        "nudge": nudge,
                         "metrics": step_metrics,
                     }
                 )
                 if tr is not None:
-                    tr.rejected(content, nudge=EARLY_ANSWER_NUDGE)
+                    tr.rejected(content, nudge=nudge)
                 continue
 
             steps.append(
@@ -315,50 +275,8 @@ class Agent:
             )
             return self._finish(content, steps, turn_metrics)
 
-        # Hit max_steps still in tool mode → force a text answer.
         if acted:
-            result, step_metrics, turn_metrics = self._complete(
-                self.messages, turn_metrics
-            )
-            answer = result.get("content") or ""
-            # Strip any trailing run blocks from the forced answer path.
-            if parse_run_blocks(answer):
-                # One last execute, then ask again without tools expectation.
-                self.messages.append(assistant(answer))
-                results = self._run_tools(parse_run_blocks(answer))
-                self.messages.append(
-                    user(RESULTS_PREFIX + format_observations(results))
-                )
-                steps.append(
-                    {
-                        "kind": "action",
-                        "raw": answer,
-                        "tool_calls": [
-                            {
-                                "action": r.name,
-                                "action_input": " ".join(r.command[1:]),
-                                "observation": r.observation,
-                                "intermediate": r.intermediate,
-                            }
-                            for r in results
-                        ],
-                        "metrics": step_metrics,
-                    }
-                )
-                result, step_metrics, turn_metrics = self._complete(
-                    self.messages, turn_metrics
-                )
-                answer = result.get("content") or ""
-            steps.append(
-                {
-                    "kind": "final",
-                    "raw": answer,
-                    "answer": answer,
-                    "reasoning": result.get("reasoning"),
-                    "metrics": step_metrics,
-                }
-            )
-            return self._finish(answer, steps, turn_metrics, stopped="max_steps")
+            return self._force_answer_after_tools(steps, turn_metrics)
 
         fallback = "(no tool call produced)"
         steps.append({"kind": "final", "raw": fallback, "answer": fallback})

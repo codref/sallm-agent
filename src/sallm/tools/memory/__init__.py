@@ -24,13 +24,7 @@ __all__ = [
     "MEMORY_SUMMARY",
     "memory_tool",
     "reset_memory_store",
-    "memory_available",
 ]
-
-
-def memory_available() -> bool:
-    """Always true: file backend needs no extra; lance needs lancedb at runtime."""
-    return True
 
 
 def memory_tool(

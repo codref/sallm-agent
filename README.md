@@ -105,18 +105,20 @@ agent = Agent(
 
 Metrics report `context_messages` (transcript length) vs `prompt_messages` (view length).
 
-### Consciousness (tool advice loops)
+### Prompts (visible templates)
 
-Optional loops read the transcript and inject an **ephemeral** `[Tool advice]` block into the system prompt for that turn only (no embeds, no auto tool runs). Compose several later; v1 ships `ToolAdvisor`.
+All agent wording lives on `Prompt` (`SYSTEM`, multi-step policy, nudges). `Agent` builds `agent.prompt` from tools / multi-step / optional `--system` extra. After each LLM call, `agent.last_prompt` holds the exact message list sent (after any context optimizer).
 
 ```python
-from sallm import Agent, ToolAdvisor
+from sallm import Agent, Prompt
 
-agent = Agent(tools=..., consciousness=ToolAdvisor())
-# or Agent(consciousness=[ToolAdvisor(), other_layer])
+agent = Agent(tools=..., system="Be terse.")
+print(agent.prompt.preview())   # labeled dump of templates + full system
+# after ask():
+print(agent.last_prompt)        # list[dict] | None
 ```
 
-CLI: `--consciousness tool-advisor` (default `none`).
+CLI: `/prompt`, `/prompt system`, `/prompt last`, and `--show-prompt` (print last LLM view after each turn).
 
 ## CLI
 
@@ -125,20 +127,19 @@ uv run sallm chat
 uv run sallm chat --tools echo,calc,dig          # default
 uv run sallm chat --tools echo,calc,memory,dig   # + memory tool
 uv run sallm chat --tools memory --memory-path .sallm-memory
-uv run sallm chat --consciousness tool-advisor   # LLM loop steers tools via system addendum
+uv run sallm chat --show-prompt                  # dump last LLM view each turn
 
 uv run sallm chat --context max-messages --max-context-messages 40
 uv run sallm chat --context summarize --context-threshold 2000 --context-keep-last 10
 
 uv run sallm chat --script tests/fixtures/sample_conversation.txt
-uv run sallm chat --script data/sample_questions.txt --tools calc,echo,memory,dig \
-  --consciousness tool-advisor
+uv run sallm chat --script data/sample_questions.txt --tools calc,echo,memory,dig
 
 # tracing
 uv run sallm chat --otlp http://localhost:4318 --metrics-port 9464 --trace-debug
 ```
 
-`--script`: one non-empty line = one turn. Slash commands: `/help`, `/clear`, `/history`, `/quit`.
+`--script`: one non-empty line = one turn. Slash commands: `/help`, `/clear`, `/history`, `/prompt`, `/quit`.
 
 Standalone binaries: `sallm-echo`, `sallm-calc`, `sallm-dig`, `sallm-memory`.
 
