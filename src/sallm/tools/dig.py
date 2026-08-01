@@ -8,9 +8,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-from sallm.tools import intermediate
+from sallm.tools.runner import intermediate
 
 STATE_PATH = Path(tempfile.gettempdir()) / "sallm-dig-state.json"
+
+DIG_SUMMARY = (
+    "Toy treasure game only. Flags: --site NAME (short label like beach|cave). "
+    "Use ONLY if the user asks to dig/play treasure. "
+    "NEVER for documents, transcripts, search, memory, Q&A, or metaphors like 'dig into'."
+)
 
 
 def _load_state() -> dict:
@@ -58,16 +64,17 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="dig",
         description=(
-            "Dig at a site for treasure. Needs several digs at the same site. "
-            "Early calls return [intermediate] results — dig again until finished. "
-            "Do not invent the treasure; only report what dig returns."
+            "Toy treasure game. Dig at a short site name several times until finished. "
+            "Early calls return [intermediate] — dig again at the same site. "
+            "Do not invent treasure; only report what dig returns. "
+            "Never use for documents, transcripts, search, or Q&A."
         ),
     )
     parser.add_argument(
         "--site",
         "-s",
         default="default",
-        help="Dig site name (default: default)",
+        help="Short dig site label (default: default)",
     )
     args = parser.parse_args(argv)
     out = dig(args.site)

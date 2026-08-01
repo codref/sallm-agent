@@ -8,8 +8,10 @@ import urllib.request
 import pytest
 
 from sallm import Agent
-from sallm.cli.tools import CHAT_TOOLS
 from sallm.messages import DEFAULT_API_BASE, DEFAULT_MODEL
+from sallm.tools import builtin_tools
+
+TOOLS = builtin_tools(("echo", "calc"))
 
 
 def _ollama_up() -> bool:
@@ -39,7 +41,7 @@ def _action_observations(result: dict) -> str:
 
 
 def test_e2e_calc_power():
-    agent = Agent(model=DEFAULT_MODEL, tools={"calc": CHAT_TOOLS["calc"]}, max_steps=4)
+    agent = Agent(model=DEFAULT_MODEL, tools={"calc": TOOLS["calc"]}, max_steps=4)
     result = agent.ask(
         "Use the calc tool exactly once. Put this in a ```run block:\n"
         "calc --expression \"2**10\"\n"
@@ -53,8 +55,8 @@ def test_e2e_multi_tool():
     agent = Agent(
         model=DEFAULT_MODEL,
         tools={
-            "calc": CHAT_TOOLS["calc"],
-            "echo": CHAT_TOOLS["echo"],
+            "calc": TOOLS["calc"],
+            "echo": TOOLS["echo"],
         },
         max_steps=4,
     )
@@ -80,7 +82,7 @@ def test_e2e_multi_tool():
 
 
 def test_e2e_help_then_calc():
-    agent = Agent(model=DEFAULT_MODEL, tools={"calc": CHAT_TOOLS["calc"]}, max_steps=5)
+    agent = Agent(model=DEFAULT_MODEL, tools={"calc": TOOLS["calc"]}, max_steps=5)
     result = agent.ask(
         "First run `calc --help` in a ```run block. "
         "Then run calc with --expression \"1+1\". "

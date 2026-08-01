@@ -378,6 +378,18 @@ class Tracer:
             name="nudge",
         )
 
+    def consciousness(self, text):
+        """Record ephemeral system addendum from consciousness loops."""
+        attrs = {"consciousness.addendum.chars": len(text or "")}
+        if self.debug:
+            attrs["consciousness.addendum"] = self._t(text or "")
+        self._event(
+            "consciousness",
+            attrs,
+            parent_id=self.turn_span_id,
+            name="consciousness",
+        )
+
     def rejected(self, raw, nudge=None):
         attrs = {"rejected.raw.chars": len(raw or "")}
         if self.debug:

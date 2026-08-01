@@ -102,6 +102,22 @@ def tool_descriptions(tools: dict[str, CliTool]) -> str:
     return "\n".join(lines)
 
 
+def split_run_line(line: str) -> list[str]:
+    """Split one ```run line into argv.
+
+    Prefer shlex (handles double-quoted values). On unclosed quotes
+    (common with apostrophes like Tom's), fall back to whitespace split
+    so the whole line is not treated as a single unknown tool name.
+    """
+    line = (line or "").strip()
+    if not line:
+        return []
+    try:
+        return shlex.split(line)
+    except ValueError:
+        return line.split()
+
+
 def parse_run_blocks(text) -> list[list[str]]:
     """Extract argv lists from ```run fenced blocks (one command per line)."""
     text = text or ""
@@ -112,10 +128,7 @@ def parse_run_blocks(text) -> list[list[str]]:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            try:
-                argv = shlex.split(line)
-            except ValueError:
-                argv = [line]
+            argv = split_run_line(line)
             if argv:
                 commands.append(argv)
     return commands

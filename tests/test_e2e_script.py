@@ -10,8 +10,8 @@ import pytest
 
 from sallm import Agent
 from sallm.cli.chat import iter_prompts
-from sallm.cli.tools import CHAT_TOOLS
 from sallm.messages import DEFAULT_API_BASE, DEFAULT_MODEL
+from sallm.tools import builtin_tools
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_conversation.txt"
 
@@ -48,10 +48,7 @@ def test_e2e_script_conversation():
 
     agent = Agent(
         model=DEFAULT_MODEL,
-        tools={
-            "calc": CHAT_TOOLS["calc"],
-            "echo": CHAT_TOOLS["echo"],
-        },
+        tools=builtin_tools(("echo", "calc")),
         max_steps=4,
     )
 

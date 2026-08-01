@@ -12,9 +12,10 @@ dependencies = [
 
 [project.scripts]
 sallm = "sallm.cli.chat:app"
-sallm-echo = "sallm.toolapps.echo:main"
-sallm-calc = "sallm.toolapps.calc:main"
-sallm-dig = "sallm.toolapps.dig:main"
+sallm-echo = "sallm.tools.echo:main"
+sallm-calc = "sallm.tools.calc:main"
+sallm-dig = "sallm.tools.dig:main"
+sallm-memory = "sallm.tools.memory.app:main"
 
 [project.optional-dependencies]
 dev = ["pytest"]

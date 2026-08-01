@@ -1,4 +1,10 @@
+"""Interactive chat REPL — agent + optional CLI tools."""
+
+from __future__ import annotations
+
 import secrets
+import tempfile
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -8,16 +14,14 @@ from rich.panel import Panel
 from rich.table import Table
 
 from sallm import Agent
+from sallm.consciousness import ToolAdvisor
 from sallm.context import MaxMessages, SummarizeOverflow
-from sallm.lance_store import LanceStore
 from sallm.llm import complete
 from sallm.messages import DEFAULT_API_BASE, DEFAULT_MODEL
-from sallm.retrieve import CompactAndRetrieve, SCOPE_ALL, SCOPE_SESSION
-from sallm.trace import Tracer, jsonl_sink, multi_sink, otlp_http_sink
-from sallm.trace import DEFAULT_TRUNCATE
 from sallm.prom import SessionMetrics
-
-from .tools import CHAT_TOOLS, reset_dig_state
+from sallm.tools import DEFAULT_TOOLS, builtin_tools, reset_dig_state
+from sallm.tools.memory import reset_memory_store
+from sallm.trace import DEFAULT_TRUNCATE, Tracer, jsonl_sink, multi_sink, otlp_http_sink
 
 app = typer.Typer(
     name="sallm",
@@ -30,19 +34,11 @@ console = Console()
 CONTEXT_NONE = "none"
 CONTEXT_MAX_MESSAGES = "max-messages"
 CONTEXT_SUMMARIZE = "summarize"
-CONTEXT_MAX_RETRIEVE = "max-messages+retrieve"
-CONTEXT_SUM_RETRIEVE = "summarize+retrieve"
-CONTEXT_CHOICES = (
-    CONTEXT_NONE,
-    CONTEXT_MAX_MESSAGES,
-    CONTEXT_SUMMARIZE,
-    CONTEXT_MAX_RETRIEVE,
-    CONTEXT_SUM_RETRIEVE,
-)
+CONTEXT_CHOICES = (CONTEXT_NONE, CONTEXT_MAX_MESSAGES, CONTEXT_SUMMARIZE)
 
-DEFAULT_EMBEDDING_MODEL = "ollama/qwen3-embedding:0.6b"
-DEFAULT_EMBEDDING_DIMENSIONS = 1024
-DEFAULT_LANCEDB_PATH = ".sallm-lancedb"
+CONSCIOUSNESS_NONE = "none"
+CONSCIOUSNESS_TOOL_ADVISOR = "tool-advisor"
+CONSCIOUSNESS_CHOICES = (CONSCIOUSNESS_NONE, CONSCIOUSNESS_TOOL_ADVISOR)
 
 
 @app.callback()
@@ -55,9 +51,8 @@ def _print_help():
     console.print(
         Panel(
             "[bold]/help[/]  this help\n"
-            "[bold]/clear[/]  reset conversation (+ this session memory)\n"
+            "[bold]/clear[/]  reset conversation (+ dig/memory tool state)\n"
             "[bold]/history[/]  show message roles + lengths\n"
-            "[bold]/memory session|all[/]  retrieval scope guardrail\n"
             "[bold]/quit[/]  exit",
             title="commands",
             border_style="dim",
@@ -193,55 +188,10 @@ def _make_summarize_fn(model, api_base):
     return summarize
 
 
-def _make_embed_fn(model, api_base, dimensions: int):
-    def embed(text: str) -> list[float]:
-        from litellm import embedding
-
-        response = embedding(
-            model=model,
-            input=[text or ""],
-            api_base=api_base,
-        )
-        data = response.data[0]
-        vec = data.get("embedding") if isinstance(data, dict) else data["embedding"]
-        vec = list(vec)
-        if len(vec) != dimensions:
-            raise ValueError(
-                f"embedding length {len(vec)} != --embedding-dimensions {dimensions}"
-            )
-        return [float(x) for x in vec]
-
-    return embed
-
-
 def _session_id(tracer) -> str:
     if tracer is not None:
         return tracer.session_id
     return secrets.token_hex(8)
-
-
-def _build_compactor(
-    kind,
-    *,
-    model,
-    api_base,
-    max_context_messages,
-    context_threshold,
-    context_keep_last,
-):
-    if kind in (CONTEXT_MAX_MESSAGES, CONTEXT_MAX_RETRIEVE):
-        n = 40 if max_context_messages is None else max_context_messages
-        return MaxMessages(n), f"MaxMessages({n})"
-    if kind in (CONTEXT_SUMMARIZE, CONTEXT_SUM_RETRIEVE):
-        threshold = 2000 if context_threshold is None else context_threshold
-        keep_last = 10 if context_keep_last is None else context_keep_last
-        opt = SummarizeOverflow(
-            threshold=threshold,
-            keep_last=keep_last,
-            summarize_fn=_make_summarize_fn(model, api_base),
-        )
-        return opt, f"SummarizeOverflow(threshold={threshold}, keep_last={keep_last})"
-    return None, ""
 
 
 def _build_context(
@@ -252,62 +202,39 @@ def _build_context(
     max_context_messages,
     context_threshold,
     context_keep_last,
-    session_id=None,
-    lancedb_path=DEFAULT_LANCEDB_PATH,
-    retrieve_k=4,
-    embedding_model=DEFAULT_EMBEDDING_MODEL,
-    embedding_dimensions=DEFAULT_EMBEDDING_DIMENSIONS,
-    chunk_tokens=512,
-    chunk_overlap_tokens=64,
-    memory_scope=SCOPE_SESSION,
 ):
     """Build a context optimizer for the chat CLI, or None."""
     if kind is None or kind == CONTEXT_NONE:
         return None, ""
-
-    if kind in (CONTEXT_MAX_MESSAGES, CONTEXT_SUMMARIZE):
-        return _build_compactor(
-            kind,
-            model=model,
-            api_base=api_base,
-            max_context_messages=max_context_messages,
-            context_threshold=context_threshold,
-            context_keep_last=context_keep_last,
+    if kind == CONTEXT_MAX_MESSAGES:
+        n = 40 if max_context_messages is None else max_context_messages
+        return MaxMessages(n), f"MaxMessages({n})"
+    if kind == CONTEXT_SUMMARIZE:
+        threshold = 2000 if context_threshold is None else context_threshold
+        keep_last = 10 if context_keep_last is None else context_keep_last
+        opt = SummarizeOverflow(
+            threshold=threshold,
+            keep_last=keep_last,
+            summarize_fn=_make_summarize_fn(model, api_base),
         )
-
-    if kind in (CONTEXT_MAX_RETRIEVE, CONTEXT_SUM_RETRIEVE):
-        compactor, c_label = _build_compactor(
-            kind,
-            model=model,
-            api_base=api_base,
-            max_context_messages=max_context_messages,
-            context_threshold=context_threshold,
-            context_keep_last=context_keep_last,
-        )
-        store = LanceStore(
-            lancedb_path,
-            embed_fn=_make_embed_fn(embedding_model, api_base, embedding_dimensions),
-            dimensions=embedding_dimensions,
-        )
-        facade = CompactAndRetrieve(
-            compactor,
-            store,
-            session_id=session_id or secrets.token_hex(8),
-            k=retrieve_k,
-            chunk_tokens=chunk_tokens,
-            chunk_overlap_tokens=chunk_overlap_tokens,
-            memory_scope=memory_scope,
-        )
-        label = (
-            f"CompactAndRetrieve({c_label}, LanceStore, "
-            f"scope={facade.memory_scope}, k={retrieve_k}, "
-            f"embed={embedding_model}/{embedding_dimensions})"
-        )
-        return facade, label
-
+        return opt, f"SummarizeOverflow(threshold={threshold}, keep_last={keep_last})"
     raise typer.BadParameter(
         f"unknown context optimizer {kind!r}; choose from {', '.join(CONTEXT_CHOICES)}"
     )
+
+
+def _parse_tools_flag(value: str | None) -> str | tuple | None:
+    """Return names for builtin_tools: 'all', 'none', comma-list, or DEFAULT_TOOLS."""
+    if value is None:
+        return DEFAULT_TOOLS
+    raw = value.strip().lower()
+    if raw in ("", "default"):
+        return DEFAULT_TOOLS
+    if raw in ("none", "off"):
+        return "none"
+    if raw == "all":
+        return "all"
+    return raw
 
 
 def iter_prompts(path):
@@ -343,6 +270,29 @@ def chat(
         "--multi-step/--no-multi-step",
         help="Allow chained tool rounds within one turn",
     ),
+    tools: str = typer.Option(
+        "echo,calc,dig",
+        "--tools",
+        help=(
+            "Comma-separated tools, or all|none|default "
+            "(echo,calc,dig,memory — memory uses file store by default)"
+        ),
+    ),
+    memory_path: str = typer.Option(
+        None,
+        "--memory-path",
+        help="Directory for the memory tool store (default: temp per session)",
+    ),
+    memory_backend: str = typer.Option(
+        "file",
+        "--memory-backend",
+        help="memory tool backend: file | lance (lance needs --extra memory)",
+    ),
+    consciousness: str = typer.Option(
+        CONSCIOUSNESS_NONE,
+        "--consciousness",
+        help="Consciousness loop: none | tool-advisor (system tool advice)",
+    ),
     script: str = typer.Option(
         None,
         "--script",
@@ -376,54 +326,22 @@ def chat(
     context: str = typer.Option(
         CONTEXT_NONE,
         "--context",
-        help=(
-            "Context optimizer: none | max-messages | summarize | "
-            "max-messages+retrieve | summarize+retrieve"
-        ),
+        help="Context optimizer: none | max-messages | summarize",
     ),
     max_context_messages: int | None = typer.Option(
         None,
         "--max-context-messages",
-        help="For max-messages[*]: keep system + last N messages (default 40)",
+        help="For max-messages: keep system + last N messages (default 40)",
     ),
     context_threshold: int | None = typer.Option(
         None,
         "--context-threshold",
-        help="For summarize[*]: overflow token budget before summarizing (default 2000)",
+        help="For summarize: overflow token budget before summarizing (default 2000)",
     ),
     context_keep_last: int | None = typer.Option(
         None,
         "--context-keep-last",
-        help="For summarize[*]: recent messages kept verbatim (default 10)",
-    ),
-    lancedb_path: str = typer.Option(
-        DEFAULT_LANCEDB_PATH,
-        "--lancedb-path",
-        help="Local LanceDB directory for +retrieve recipes",
-    ),
-    retrieve_k: int = typer.Option(
-        4, "--retrieve-k", help="Top-k chunks to inject for +retrieve"
-    ),
-    embedding_model: str = typer.Option(
-        DEFAULT_EMBEDDING_MODEL,
-        "--embedding-model",
-        help="LiteLLM embedding model id (Ollama)",
-    ),
-    embedding_dimensions: int = typer.Option(
-        DEFAULT_EMBEDDING_DIMENSIONS,
-        "--embedding-dimensions",
-        help="Expected embedding vector length (must match model)",
-    ),
-    chunk_tokens: int = typer.Option(
-        512, "--chunk-tokens", help="Max estimated tokens per memory chunk"
-    ),
-    chunk_overlap_tokens: int = typer.Option(
-        64, "--chunk-overlap-tokens", help="Overlap between memory chunks"
-    ),
-    memory_scope: str = typer.Option(
-        SCOPE_SESSION,
-        "--memory-scope",
-        help="Retrieval guardrail: session (default) | all",
+        help="For summarize: recent messages kept verbatim (default 10)",
     ),
 ):
     """Interactive chat REPL for testing the agent."""
@@ -432,13 +350,19 @@ def chat(
         raise typer.BadParameter(
             f"unknown --context {context!r}; choose from {', '.join(CONTEXT_CHOICES)}"
         )
-    # Backward-compatible: --max-context-messages alone implies max-messages.
     if kind == CONTEXT_NONE and max_context_messages is not None:
         kind = CONTEXT_MAX_MESSAGES
 
-    scope = (memory_scope or SCOPE_SESSION).strip().lower()
-    if scope not in (SCOPE_SESSION, SCOPE_ALL):
-        raise typer.BadParameter("--memory-scope must be session or all")
+    backend = (memory_backend or "file").strip().lower()
+    if backend not in ("file", "lance"):
+        raise typer.BadParameter("--memory-backend must be file or lance")
+
+    consc_kind = (consciousness or CONSCIOUSNESS_NONE).strip().lower()
+    if consc_kind not in CONSCIOUSNESS_CHOICES:
+        raise typer.BadParameter(
+            f"unknown --consciousness {consciousness!r}; "
+            f"choose from {', '.join(CONSCIOUSNESS_CHOICES)}"
+        )
 
     tracer = _build_trace(
         trace,
@@ -448,6 +372,21 @@ def chat(
         metrics_port=metrics_port,
     )
     sid = _session_id(tracer)
+    mem_path = memory_path or str(
+        Path(tempfile.gettempdir()) / f"sallm-memory-{sid}"
+    )
+
+    try:
+        tool_names = _parse_tools_flag(tools)
+        registry = builtin_tools(
+            tool_names,
+            memory_path=mem_path,
+            memory_session=sid,
+            memory_backend=backend,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
     ctx, context_label = _build_context(
         kind,
         model=model,
@@ -455,27 +394,26 @@ def chat(
         max_context_messages=max_context_messages,
         context_threshold=context_threshold,
         context_keep_last=context_keep_last,
-        session_id=sid,
-        lancedb_path=lancedb_path,
-        retrieve_k=retrieve_k,
-        embedding_model=embedding_model,
-        embedding_dimensions=embedding_dimensions,
-        chunk_tokens=chunk_tokens,
-        chunk_overlap_tokens=chunk_overlap_tokens,
-        memory_scope=scope,
     )
+    consc = None
+    consc_label = ""
+    if consc_kind == CONSCIOUSNESS_TOOL_ADVISOR:
+        consc = ToolAdvisor(model=model, api_base=api_base)
+        consc_label = "ToolAdvisor"
+
     agent = Agent(
         model=model,
         api_base=api_base,
         system=system,
         max_steps=max_steps,
         multi_step=multi_step,
-        tools=CHAT_TOOLS,
+        tools=registry,
         trace=tracer,
         context=ctx,
+        consciousness=consc,
     )
 
-    tool_names = ", ".join(CHAT_TOOLS) or "(none)"
+    tool_label = ", ".join(registry) or "(none)"
     trace_bits = []
     if trace:
         trace_bits.append(f"jsonl={trace}")
@@ -496,12 +434,20 @@ def chat(
     context_line = (
         f"context: [cyan]{context_label}[/]\n" if context_label else ""
     )
+    consc_line = (
+        f"consciousness: [cyan]{consc_label}[/]\n" if consc_label else ""
+    )
+    mem_line = ""
+    if "memory" in registry:
+        mem_line = (
+            f"memory: [cyan]{backend}[/] path=[cyan]{mem_path}[/]\n"
+        )
     console.print(
         Panel(
             f"[bold]sallm[/] chat\nmodel: [cyan]{model}[/]\napi_base: [cyan]{api_base}[/]\n"
-            f"tools: [cyan]{tool_names}[/] (CLI subprocesses)\n"
+            f"tools: [cyan]{tool_label}[/] (CLI subprocesses)\n"
             f"multi_step: [cyan]{multi_step}[/]  max_steps: [cyan]{max_steps}[/]\n"
-            f"{script_line}{context_line}{trace_line}"
+            f"{script_line}{context_line}{consc_line}{mem_line}{trace_line}"
             "type /help for commands",
             border_style="green",
         )
@@ -510,7 +456,8 @@ def chat(
     prompts = iter_prompts(script) if script else iter_repl()
     for line in prompts:
         if script:
-            console.print(f"[bold green]you>[/] {line}")
+            preview = line if len(line) <= 200 else line[:197] + "..."
+            console.print(f"[bold green]you>[/] {preview}")
 
         if not line:
             continue
@@ -518,7 +465,6 @@ def chat(
         if line.startswith("/"):
             parts = line.split(None, 1)
             cmd = parts[0].lower()
-            arg = parts[1].strip().lower() if len(parts) > 1 else ""
             if cmd in ("/quit", "/exit", "/q"):
                 console.print("bye")
                 return
@@ -528,37 +474,36 @@ def chat(
             if cmd == "/clear":
                 agent.clear()
                 reset_dig_state()
+                if "memory" in registry:
+                    reset_memory_store(mem_path)
                 console.print("[dim]conversation cleared[/]")
                 continue
             if cmd == "/history":
                 _print_history(agent)
                 continue
-            if cmd == "/memory":
-                facade = agent.context
-                if not isinstance(facade, CompactAndRetrieve):
-                    console.print(
-                        "[red]/memory requires a +retrieve context optimizer[/]"
-                    )
-                    continue
-                if arg not in (SCOPE_SESSION, SCOPE_ALL):
-                    console.print(
-                        f"[dim]memory scope:[/] {facade.memory_scope}  "
-                        f"(use /memory session|all)"
-                    )
-                    continue
-                facade.memory_scope = arg
-                console.print(f"[dim]memory scope:[/] {facade.memory_scope}")
-                continue
             console.print(f"[red]unknown command:[/] {cmd}  (try /help)")
             continue
 
-        with console.status("[dim]thinking…[/]", spinner="dots"):
+        status = (
+            "[dim]consciousness + thinking…[/]"
+            if agent.consciousness
+            else "[dim]thinking…[/]"
+        )
+        with console.status(status, spinner="dots"):
             try:
                 result = agent.ask(line)
             except Exception as exc:
                 console.print(f"[red]error:[/] {exc}")
                 continue
 
+        if result.get("consciousness"):
+            console.print(
+                Panel(
+                    escape(result["consciousness"]),
+                    title="consciousness",
+                    border_style="dim",
+                )
+            )
         _print_steps(result.get("steps") or [])
         console.print(
             Panel(

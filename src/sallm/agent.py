@@ -1,8 +1,17 @@
-"""Agent that drives CLI tools via ```run blocks (no native JSON tool calls)."""
+"""Agent: LLM turns + ```run tool execution (observations land in the transcript).
+
+Tool I/O contract:
+  - Model emits fenced ```run blocks → parse_run_blocks → run_many
+  - Observations append as user messages prefixed with RESULTS_PREFIX
+  - stdout starting with [intermediate] triggers a continue nudge
+Context optimizers (optional) only reshape the prompt view; they do not run tools.
+Consciousness loops (optional) inject ephemeral system addenda (tool advice only).
+"""
 
 import time
 
 from . import metrics as metrics_mod
+from .consciousness import join_addenda, normalize_consciousness
 from .llm import complete
 from .messages import DEFAULT_API_BASE, DEFAULT_MODEL, assistant, system, user
 from .tools import (
@@ -43,6 +52,9 @@ Default behavior: answer the user directly in plain text.
 Do not run tools for greetings, identity questions, opinions, explanations,
 or anything you can answer from your own knowledge.
 
+When a tool-advice section is appended below, treat it as guidance for
+this turn: prefer the named tools when relevant; still do not invent tool output.
+
 Tools are small command-line programs. To use them, reply with a fenced run block
 containing one command per line (shell-style flags, no JSON):
 
@@ -75,6 +87,7 @@ class Agent:
         multi_step=True,
         trace=None,
         context=None,
+        consciousness=None,
     ):
         self.model = model or DEFAULT_MODEL
         self.api_base = api_base or DEFAULT_API_BASE
@@ -84,21 +97,26 @@ class Agent:
         self.system = system
         self.trace = trace  # Tracer | None — never touch when None
         self.context = context  # optimizer | None — prepare() view for LLM
+        self.consciousness = normalize_consciousness(consciousness)
+        self._turn_addendum = ""  # ephemeral; set per ask()
         self.messages = []
         self._ensure_system()
 
     def _multi_step_policy(self):
         return MULTI_STEP_ON if self.multi_step else MULTI_STEP_OFF
 
-    def _ensure_system(self):
+    def _base_system_content(self):
         base = SYSTEM.format(
             tools=tool_descriptions(self.tools),
             multi_step_policy=self._multi_step_policy(),
         )
         if self.system:
-            content = self.system.rstrip() + "\n\n" + base
-        else:
-            content = base
+            return self.system.rstrip() + "\n\n" + base
+        return base
+
+    def _ensure_system(self):
+        """Keep transcript system message as stable base (no consciousness addenda)."""
+        content = self._base_system_content()
         if self.messages and self.messages[0].get("role") == "system":
             self.messages[0] = system(content)
         else:
@@ -106,6 +124,7 @@ class Agent:
 
     def clear(self):
         self.messages = []
+        self._turn_addendum = ""
         self._ensure_system()
         ctx = self.context
         if ctx is not None:
@@ -113,11 +132,26 @@ class Agent:
             if on_clear is not None:
                 on_clear()
 
+    def _run_consciousness(self) -> str:
+        parts = []
+        for layer in self.consciousness:
+            advise = getattr(layer, "advise", None)
+            if advise is None:
+                continue
+            part = advise(self.messages, self.tools)
+            if part and str(part).strip():
+                parts.append(str(part).strip())
+        return join_addenda(parts)
+
     def _prompt_messages(self, messages):
+        view = list(messages)
+        if self._turn_addendum and view and view[0].get("role") == "system":
+            base = view[0].get("content") or ""
+            view[0] = system(base.rstrip() + "\n\n" + self._turn_addendum)
         ctx = self.context
         if ctx is None:
-            return messages
-        return ctx.prepare(messages)
+            return view
+        return ctx.prepare(view)
 
     def _complete(self, messages, turn_metrics):
         prompt = self._prompt_messages(messages)
@@ -183,6 +217,8 @@ class Agent:
         }
         if stopped:
             out["stopped"] = stopped
+        if self._turn_addendum:
+            out["consciousness"] = self._turn_addendum
         return out
 
     def _inject_continue_nudge(self):
@@ -201,6 +237,10 @@ class Agent:
         tr = self.trace
         if tr is not None:
             tr.turn_start(user_text, self.messages, model=self.model)
+
+        self._turn_addendum = self._run_consciousness()
+        if self._turn_addendum and tr is not None:
+            tr.consciousness(self._turn_addendum)
 
         for _ in range(self.max_steps):
             result, step_metrics, turn_metrics = self._complete(
