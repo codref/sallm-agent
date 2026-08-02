@@ -8,6 +8,8 @@ dependencies = [
     "litellm",
     "typer",
     "rich",
+    "peewee",
+    "lancedb",
 ]
 
 [project.scripts]
@@ -15,11 +17,9 @@ sallm = "sallm.cli.chat:app"
 sallm-echo = "sallm.tools.echo:main"
 sallm-calc = "sallm.tools.calc:main"
 sallm-dig = "sallm.tools.dig:main"
-sallm-memory = "sallm.tools.memory.app:main"
 
 [project.optional-dependencies]
 dev = ["pytest"]
-memory = ["lancedb"]
 
 [build-system]
 requires = ["hatchling"]

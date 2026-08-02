@@ -75,6 +75,27 @@ class SessionMetrics:
         self._turn_output = _Histogram()
         self._turn_total = _Histogram()
         self._llm_total = _Histogram()
+        # Stack / control / receipt (gauges + counters for Grafana).
+        self.stack_depth = 0
+        self.active_skill = ""
+        self.goal_chars = 0
+        self._skills = {}  # skill -> 1 active / 0 inactive
+        self._control = {}  # action -> count
+        self.receipt_budget = 0
+        self.receipt_total = 0
+        self.receipt_omitted = 0
+        self.retrieval_hits = 0
+        self._receipt_sections = {}  # section -> tokens
+        # Extract / queue lens (waterfall vs deferred extract).
+        self.extract_mode = "waterfall"
+        self.extract_queue_depth = 0
+        self.extract_enqueued_total = 0
+        self.extract_drained_total = {}  # reason -> count
+        self.extract_miss_flush_total = 0
+        self.extract_calls_total = 0
+        self.extract_elapsed_ms_sum = 0.0
+        self.extract_last_elapsed_ms = 0.0
+        self.extract_facts_total = 0
         self._httpd = None
         self._thread = None
 
@@ -129,6 +150,82 @@ class SessionMetrics:
             self._turn_output.observe(out)
             self._turn_total.observe(total)
 
+    def observe_control(self, action, skill=""):
+        action = (action or "keep").strip() or "keep"
+        with self._lock:
+            self._control[action] = self._control.get(action, 0) + 1
+            if skill:
+                # Keep skill label set even before stack observe.
+                self._skills.setdefault(skill, 0)
+
+    def observe_stack(self, depth, active_skill="", goal=""):
+        active_skill = (active_skill or "").strip()
+        with self._lock:
+            self.stack_depth = int(depth or 0)
+            self.active_skill = active_skill
+            self.goal_chars = len(goal or "")
+            for name in list(self._skills):
+                self._skills[name] = 0
+            if active_skill:
+                self._skills[active_skill] = 1
+
+    def observe_receipt(self, receipt):
+        if receipt is None:
+            return
+        if hasattr(receipt, "as_dict"):
+            receipt = receipt.as_dict()
+        if not isinstance(receipt, dict):
+            return
+        sections = {
+            s.get("name"): int(s.get("tokens") or 0)
+            for s in (receipt.get("sections") or [])
+            if isinstance(s, dict) and s.get("name")
+        }
+        with self._lock:
+            self.receipt_budget = int(receipt.get("budget") or 0)
+            self.receipt_total = int(receipt.get("total_tokens") or 0)
+            self.receipt_omitted = int(receipt.get("omitted_messages") or 0)
+            self.retrieval_hits = len(receipt.get("retrieved") or [])
+            self._receipt_sections = {
+                "system": sections.get("system", 0),
+                "retrieval": sections.get("retrieval", 0),
+                "history": sections.get("history", 0),
+            }
+
+    def set_extract_mode(self, mode: str):
+        mode = (mode or "waterfall").strip().lower() or "waterfall"
+        with self._lock:
+            self.extract_mode = mode
+
+    def observe_extract(self, elapsed_ms, facts=0):
+        with self._lock:
+            self.extract_calls_total += 1
+            ms = float(elapsed_ms or 0.0)
+            self.extract_elapsed_ms_sum += ms
+            self.extract_last_elapsed_ms = ms
+            self.extract_facts_total += int(facts or 0)
+
+    def observe_extract_queue(
+        self,
+        depth,
+        *,
+        enqueued=0,
+        drained=0,
+        reason=None,
+        miss_flush=False,
+    ):
+        with self._lock:
+            self.extract_queue_depth = int(depth or 0)
+            self.extract_enqueued_total += int(enqueued or 0)
+            n = int(drained or 0)
+            if n:
+                key = (reason or "lazy").strip() or "lazy"
+                self.extract_drained_total[key] = (
+                    self.extract_drained_total.get(key, 0) + n
+                )
+            if miss_flush:
+                self.extract_miss_flush_total += 1
+
     def render(self):
         sid = self.session_id
         lines = [
@@ -168,6 +265,42 @@ class SessionMetrics:
             "# TYPE sallm_turn_total_tokens histogram",
             "# HELP sallm_llm_total_tokens Total tokens per LLM completion.",
             "# TYPE sallm_llm_total_tokens histogram",
+            "# HELP sallm_stack_depth Skill stack depth after the latest turn.",
+            "# TYPE sallm_stack_depth gauge",
+            "# HELP sallm_skill_active 1 for the active skill, 0 for others seen.",
+            "# TYPE sallm_skill_active gauge",
+            "# HELP sallm_goal_chars Characters in the current goal string.",
+            "# TYPE sallm_goal_chars gauge",
+            "# HELP sallm_control_actions_total Controller routing actions.",
+            "# TYPE sallm_control_actions_total counter",
+            "# HELP sallm_receipt_budget Prompt token budget from ModelProfile.",
+            "# TYPE sallm_receipt_budget gauge",
+            "# HELP sallm_receipt_total_tokens Estimated prompt tokens (ContextReceipt).",
+            "# TYPE sallm_receipt_total_tokens gauge",
+            "# HELP sallm_receipt_omitted_messages History messages omitted by budget.",
+            "# TYPE sallm_receipt_omitted_messages gauge",
+            "# HELP sallm_receipt_section_tokens Tokens per receipt section.",
+            "# TYPE sallm_receipt_section_tokens gauge",
+            "# HELP sallm_retrieval_hits Vector hits injected into the latest prompt.",
+            "# TYPE sallm_retrieval_hits gauge",
+            "# HELP sallm_extract_mode 1 for the active extract mode label.",
+            "# TYPE sallm_extract_mode gauge",
+            "# HELP sallm_extract_queue_depth Pending deferred extract jobs.",
+            "# TYPE sallm_extract_queue_depth gauge",
+            "# HELP sallm_extract_enqueued_total Extract jobs deferred (queue mode).",
+            "# TYPE sallm_extract_enqueued_total counter",
+            "# HELP sallm_extract_drained_total Extract jobs drained from the queue.",
+            "# TYPE sallm_extract_drained_total counter",
+            "# HELP sallm_extract_miss_flush_total Miss-driven drain + re-retrieve events.",
+            "# TYPE sallm_extract_miss_flush_total counter",
+            "# HELP sallm_extract_calls_total Memory-extract LLM invocations.",
+            "# TYPE sallm_extract_calls_total counter",
+            "# HELP sallm_extract_elapsed_ms_sum Wall ms spent in extract LLM calls.",
+            "# TYPE sallm_extract_elapsed_ms_sum counter",
+            "# HELP sallm_extract_last_elapsed_ms Latest extract call duration (ms).",
+            "# TYPE sallm_extract_last_elapsed_ms gauge",
+            "# HELP sallm_extract_facts_total Grounded derived facts written.",
+            "# TYPE sallm_extract_facts_total counter",
         ]
         with self._lock:
             for model, row in self._llm.items():
@@ -201,6 +334,59 @@ class SessionMetrics:
             lines.append(
                 f"sallm_last_turn_index{_labels(**slab)} {self.last_turn_index}"
             )
+            lines.append(f"sallm_stack_depth{_labels(**slab)} {self.stack_depth}")
+            lines.append(f"sallm_goal_chars{_labels(**slab)} {self.goal_chars}")
+            lines.append(f"sallm_receipt_budget{_labels(**slab)} {self.receipt_budget}")
+            lines.append(
+                f"sallm_receipt_total_tokens{_labels(**slab)} {self.receipt_total}"
+            )
+            lines.append(
+                f"sallm_receipt_omitted_messages{_labels(**slab)} {self.receipt_omitted}"
+            )
+            lines.append(
+                f"sallm_retrieval_hits{_labels(**slab)} {self.retrieval_hits}"
+            )
+            for mode_name in ("waterfall", "queue"):
+                lab = _labels(session_id=sid, mode=mode_name)
+                active = 1 if self.extract_mode == mode_name else 0
+                lines.append(f"sallm_extract_mode{lab} {active}")
+            lines.append(
+                f"sallm_extract_queue_depth{_labels(**slab)} {self.extract_queue_depth}"
+            )
+            lines.append(
+                f"sallm_extract_enqueued_total{_labels(**slab)} "
+                f"{self.extract_enqueued_total}"
+            )
+            for reason, count in self.extract_drained_total.items():
+                lab = _labels(session_id=sid, reason=reason)
+                lines.append(f"sallm_extract_drained_total{lab} {count}")
+            lines.append(
+                f"sallm_extract_miss_flush_total{_labels(**slab)} "
+                f"{self.extract_miss_flush_total}"
+            )
+            lines.append(
+                f"sallm_extract_calls_total{_labels(**slab)} {self.extract_calls_total}"
+            )
+            lines.append(
+                f"sallm_extract_elapsed_ms_sum{_labels(**slab)} "
+                f"{self.extract_elapsed_ms_sum}"
+            )
+            lines.append(
+                f"sallm_extract_last_elapsed_ms{_labels(**slab)} "
+                f"{self.extract_last_elapsed_ms}"
+            )
+            lines.append(
+                f"sallm_extract_facts_total{_labels(**slab)} {self.extract_facts_total}"
+            )
+            for skill, active in self._skills.items():
+                lab = _labels(session_id=sid, skill=skill)
+                lines.append(f"sallm_skill_active{lab} {active}")
+            for action, count in self._control.items():
+                lab = _labels(session_id=sid, action=action)
+                lines.append(f"sallm_control_actions_total{lab} {count}")
+            for section, tokens in self._receipt_sections.items():
+                lab = _labels(session_id=sid, section=section)
+                lines.append(f"sallm_receipt_section_tokens{lab} {tokens}")
             lines.extend(self._turn_input.render_lines("sallm_turn_input_tokens", slab))
             lines.extend(self._turn_output.render_lines("sallm_turn_output_tokens", slab))
             lines.extend(self._turn_total.render_lines("sallm_turn_total_tokens", slab))

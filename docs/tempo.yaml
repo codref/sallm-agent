@@ -1,3 +1,7 @@
+# Required so Grafana 11 can stream TraceQL search (else panels stay empty with
+# "backend TraceQL search queries are not supported").
+stream_over_http_enabled: true
+
 server:
   http_listen_port: 3200
 

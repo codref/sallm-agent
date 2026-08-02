@@ -26,6 +26,7 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_INSTALL_PLUGINS: yesoreyeram-infinity-datasource
     volumes:
       - ./docs/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
       - ./docs/grafana-dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro

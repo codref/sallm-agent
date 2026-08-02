@@ -1,0 +1,6 @@
+{"id": "q01", "question": "What is the project code name in the briefing?", "contains": ["ORION-7", "ORION"], "mandatory": true}
+{"id": "q02", "question": "Where does the outbox live according to the briefing?", "contains": ["SQL Server", "same"], "mandatory": false}
+{"id": "q03", "question": "What system receives the extracted stream?", "contains": ["Kafka", "Event Hubs", "Azure"], "mandatory": false}
+{"id": "q04", "question": "What major risk is called out for batch jobs?", "contains": ["overlapping", "SQL", "cores"], "mandatory": false}
+{"id": "q05", "question": "What future extraction mechanism is desired?", "contains": ["PubSub", "subscription", "idle"], "mandatory": false}
+{"id": "q06", "question": "Who is the non-technical liaison named at the end?", "contains": ["Carlos"], "mandatory": false}

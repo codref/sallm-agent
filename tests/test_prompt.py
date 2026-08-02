@@ -42,7 +42,7 @@ def test_agent_uses_prompt_and_sets_last_prompt():
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         "elapsed_ms": 1.0,
     }
-    with patch("sallm.agent.complete", return_value=fake) as mocked:
+    with patch("sallm.legacy_ask.complete", return_value=fake) as mocked:
         agent = Agent(tools={}, system="Extra.")
         assert isinstance(agent.prompt, PromptDirect)
         assert "Extra." in agent.prompt.system()

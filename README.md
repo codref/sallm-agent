@@ -1,164 +1,138 @@
 # sallm-agent
 
-Minimal tool-calling agent library (`sallm`) over [LiteLLM](https://github.com/BerriAI/litellm), aimed at local models via Ollama.
+Minimal tool-calling agent (`sallm`) for **local small LLMs** (default: Gemma 4 4B via Ollama).
 
-**Library core:** LLM turns + message transcript + CLI tool execution.  
-**Shipped tools** are optional deployable CLIs (`echo`, `calc`, `dig`, `memory`). Storage/retrieval is the `memory` tool — not an invisible RAG pipeline inside the agent.
+**Focus:** keep context predictable over long sessions — durable SQLite state, LanceDB retrieval, a skill stack, and a visible `ContextReceipt` that explains token spend.
+
+Not an invisible RAG black box: raw messages stay canonical; vectors are a rebuildable index; derived facts must cite source message ids.
 
 ## Setup
 
 ```bash
 ollama pull gemma4:e4b-it-qat
+ollama pull qwen3-embedding:0.6b
 
 uv sync --extra dev
-# optional: LanceDB backend for the memory tool
-uv sync --extra memory --extra dev
 ```
 
-## Tool contract
+Core deps include `peewee` (SQLite ORM) and `lancedb` (vector index). There is **no** DSPy/Pydantic dependency.
 
-| Rule | Detail |
-|------|--------|
-| Identity | Tool name = first argv token (`calc`, `dig`, `echo`, `memory`) |
-| Help | Every tool supports `--help` |
-| Args | CLI flags / positionals only (never JSON blobs) |
-| Success | exit 0; result = stdout |
-| Failure | non-zero exit; stderr/stdout returned as the observation |
-| Intermediate | stdout may start with `[intermediate]` (agent keeps going) |
+## Turn pipeline
 
-````markdown
-```run
-calc --expression "2**10"
-memory search --query "IAS service"
 ```
-````
+user → persist raw message
+  → goal/skill control (small JSON call)
+  → vector retrieve (Qwen embed + LanceDB)
+  → budgeted prompt + ReAct ```run tools
+  → persist answer
+  → extract grounded facts + index chunks
+```
 
 ## Library
 
-Register `CliTool` instances, or use shipped tools via `builtin_tools`:
-
 ```python
-import sys
-from sallm import Agent
-from sallm.tools import CliTool, builtin_tools
-
-# shipped set
-agent = Agent(tools=builtin_tools(("calc", "echo")))
-
-# or hand-roll
-calc = CliTool(
-    name="calc",
-    argv=[sys.executable, "-m", "sallm.tools.calc"],
-    summary="Evaluate a math expression. Flags: --expression EXPR.",
-)
-agent = Agent(tools={"calc": calc})
-print(agent.ask("What is 2**10? Use the calc tool.")["answer"])
-```
-
-Runner helpers: `parse_run_blocks`, `run_tool`, `run_many`, `help_text` in `sallm.tools`.
-
-### Shipped tools
-
-| Tool | Role |
-|------|------|
-| `echo` / `calc` | demos |
-| `dig` | multi-step treasure game (entropy distractor in tests — not for documents) |
-| `memory` | `add` / `search` / `clear` over a session store |
-
-```bash
-# memory tool (file backend by default)
-sallm-memory --path /tmp/mem --session demo add --text "The code is 42"
-sallm-memory --path /tmp/mem --session demo search --query "code"
-```
-
-Lance backend: `uv sync --extra memory`, then `--backend lance` (embeddings via `$SALLM_EMBEDDING_MODEL` / `$SALLM_API_BASE`).
-
-### Context optimizers (economy only)
-
-`Agent` keeps a full transcript on `agent.messages`. Optional `context=` reshapes the **prompt view** only:
-
-```python
-from sallm import Agent
-from sallm.context import MaxMessages, SummarizeOverflow
-from sallm.llm import complete
-from sallm.messages import DEFAULT_MODEL, DEFAULT_API_BASE
-
-agent = Agent(tools=..., context=MaxMessages(40))
-
-def summarize(text: str) -> str:
-    result = complete(
-        model=DEFAULT_MODEL,
-        messages=[{"role": "user", "content": "Summarize briefly.\n\n" + text}],
-        api_base=DEFAULT_API_BASE,
-    )
-    return result.get("content") or ""
+from sallm import Agent, RetrievalConfig, Skill, SkillRegistry
+from sallm.tools import builtin_tools
 
 agent = Agent(
-    tools=...,
-    context=SummarizeOverflow(
-        threshold=2000,
-        keep_last=10,
-        summarize_fn=summarize,
+    tools=builtin_tools(("calc", "echo")),
+    state_path="/tmp/sallm/state.db",
+    vector_path="/tmp/sallm/vectors",
+    session_id="demo",
+    retrieval=RetrievalConfig(
+        memory_gate=True,
+        search_mode="dense",  # or "hybrid"
+        use_instruct=True,
+        use_rewrite=False,
+        use_hyde=False,
     ),
 )
+result = agent.ask("Remember the code is PURPLE-42.")
+print(result["answer"])
+print(result["receipt"])  # ContextReceipt as dict
+print(result["goal"], result["stack"])
 ```
 
-Metrics report `context_messages` (transcript length) vs `prompt_messages` (view length).
+Resume by reusing `state_path` + `session_id`.
 
-### Prompts (visible templates)
+### VectorStore contract
 
-All agent wording lives on `Prompt` (`SYSTEM`, multi-step policy, nudges). `Agent` builds `agent.prompt` from tools / multi-step / optional `--system` extra. After each LLM call, `agent.last_prompt` holds the exact message list sent (after any context optimizer).
+Implement `upsert` / `search` / `delete_session` / `close` (see `sallm.memory.types.VectorStore`). Default: `LanceVectorStore`. A future **pgvector** adapter can satisfy the same dataclasses (`VectorRecord`, `VectorQuery`, `VectorHit`) without changing the agent.
 
-```python
-from sallm import Agent, Prompt
+SQLite stores chunk text + `indexed` flags; LanceDB is rebuilt from those rows after a crash.
 
-agent = Agent(tools=..., system="Be terse.")
-print(agent.prompt.preview())   # labeled dump of templates + full system
-# after ask():
-print(agent.last_prompt)        # list[dict] | None
+### Skills
+
+Default skill is `converse`. Register more with `SkillRegistry` (name, description, prompt fragment, optional tool subset).
+
+### Compiled profiles
+
+Neutral JSON under `sallm/profiles/` (instructions + demos + budgets). Offline:
+
+```bash
+uv run sallm optimize --dataset data/cases.jsonl --task controller --out /tmp/profile.json
 ```
 
-CLI: `/prompt`, `/prompt system`, `/prompt last`, and `--show-prompt` (print last LLM view after each turn).
+`sallm chat` never optimizes at startup; it only loads a profile.
 
 ## CLI
 
 ```bash
-uv run sallm chat
-uv run sallm chat --tools echo,calc,dig          # default
-uv run sallm chat --tools echo,calc,memory,dig   # + memory tool
-uv run sallm chat --tools memory --memory-path .sallm-memory
-uv run sallm chat --show-prompt                  # dump last LLM view each turn
+# Durable long session (recommended)
+uv run sallm chat \
+  --state-path .sallm/state.db \
+  --vector-path .sallm/vectors \
+  --session long1 \
+  --retrieval-query instruct \
+  --search dense \
+  --memory-gate \
+  --extract waterfall \
+  --tools echo,calc
 
-uv run sallm chat --context max-messages --max-context-messages 40
-uv run sallm chat --context summarize --context-threshold 2000 --context-keep-last 10
-
+uv run sallm chat --show-prompt
 uv run sallm chat --script tests/fixtures/sample_conversation.txt
-uv run sallm chat --script data/sample_questions.txt --tools calc,echo,memory,dig
-
-# tracing
-uv run sallm chat --otlp http://localhost:4318 --metrics-port 9464 --trace-debug
 ```
 
-`--script`: one non-empty line = one turn. Slash commands: `/help`, `/clear`, `/history`, `/prompt`, `/quit`.
+Slash commands: `/help`, `/clear`, `/history`, `/prompt`, `/state`, `/stack`, `/memory`, `/context`, `/quit`.
 
-Standalone binaries: `sallm-echo`, `sallm-calc`, `sallm-dig`, `sallm-memory`.
+### Tool contract
 
-### Tracing
+| Rule | Detail |
+|------|--------|
+| Identity | Tool name = first argv token |
+| Help | Every tool supports `--help` |
+| Args | CLI flags only (no JSON blobs) |
+| Intermediate | stdout may start with `[intermediate]` |
 
-Pass `trace=` to `Agent` or use CLI flags. See [docs/tracing-tempo.md](docs/tracing-tempo.md).
-
-```python
-from sallm.trace import Tracer, jsonl_sink
-from sallm.prom import SessionMetrics
-
-metrics = SessionMetrics(session_id="demo")
-metrics.start_server(port=9464)
-trace = Tracer(jsonl_sink("/tmp/sallm.jsonl"), debug=True, truncate=512, metrics=metrics)
-agent = Agent(tools=..., trace=trace)
+````markdown
+```run
+calc --expression "2**10"
 ```
+````
+
+Shipped tools: `echo`, `calc`, `dig`.
+
+### Legacy context optimizers
+
+Still available without durable state: `--context max-messages|summarize`. Prefer `--state-path` + retrieval for hour-scale sessions.
 
 ## Tests
 
 ```bash
 uv run pytest tests/ -v
+# E2E needs Ollama + gemma4:e4b-it-qat (+ qwen3-embedding:0.6b for stack memory)
 ```
+
+## Limits
+
+Retrieval improves grounding; it does **not** guarantee the model never invents facts. Source-tagged memory and `ContextReceipt` make misses inspectable.
+
+## How it works
+
+Walkthrough with an example, stage-by-stage flow, token-budget simulation, and hypothesis checks: [docs/how-the-agent-works.md](docs/how-the-agent-works.md).
+
+When a script turn (briefing / transcript) is larger than the history budget: [docs/oversized-briefings.md](docs/oversized-briefings.md).
+
+Offline prompt/parameter tuning: [docs/optimize-prompts.md](docs/optimize-prompts.md).
+
+Skills (selection, stack, tools): [docs/skills.md](docs/skills.md).

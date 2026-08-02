@@ -7,10 +7,19 @@ datasources:
     uid: tempo
     jsonData:
       httpMethod: GET
+      search:
+        hide: false
+      nodeGraph:
+        enabled: true
+      # Grafana 11+ TraceQL search in Explore/dashboards uses gRPC streaming
+      # (HTTP /api/ds/query TraceQL search is intentionally stubbed). Requires
+      # Tempo stream_over_http_enabled: true.
+      streamingEnabled:
+        search: true
+        metrics: false
       tracesToLogsV2:
         datasourceUid: ""
 
-  # Name must be lowercase "prometheus" — Grafana resolves some panels by name.
   - name: prometheus
     type: prometheus
     access: proxy
@@ -20,3 +29,12 @@ datasources:
     editable: false
     jsonData:
       timeInterval: 5s
+
+  # Tempo HTTP /api/search works; Grafana's built-in TraceQL QueryData path does
+  # not. Infinity turns search JSON into dashboard tables with clickable TraceIDs.
+  - name: TempoHTTP
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    uid: tempo-http
+    jsonData:
+      auth_method: none

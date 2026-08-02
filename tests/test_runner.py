@@ -41,13 +41,12 @@ def test_parse_run_blocks_empty():
 def test_parse_run_line_apostrophe_does_not_collapse_command():
     """Tom's breaks shlex; must not become unknown tool '<whole line>'."""
     text = """```run
-memory search --query Tom's code diagram missing component
+echo --text Tom's code diagram missing component
 ```"""
     cmds = parse_run_blocks(text)
     assert len(cmds) == 1
-    assert cmds[0][0] == "memory"
-    assert cmds[0][1] == "search"
-    assert "--query" in cmds[0]
+    assert cmds[0][0] == "echo"
+    assert "--text" in cmds[0]
     assert "Tom's" in cmds[0]
 
 

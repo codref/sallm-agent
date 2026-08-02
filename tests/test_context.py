@@ -154,7 +154,7 @@ def test_agent_none_context_metrics_match():
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         "elapsed_ms": 1.0,
     }
-    with patch("sallm.agent.complete", return_value=fake):
+    with patch("sallm.legacy_ask.complete", return_value=fake):
         agent = Agent(tools={})
         result = agent.ask("hi")
     m = result["metrics"]

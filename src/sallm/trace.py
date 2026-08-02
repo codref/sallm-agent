@@ -99,17 +99,20 @@ def otlp_http_sink(endpoint, service_name="sallm"):
             return
         start_ns = event.get("start_ns") or event.get("ts_ns") or _now_ns()
         end_ns = event.get("end_ns") or start_ns
+        attrs = dict(event.get("attrs") or {})
+        resource_attrs = [
+            {"key": "service.name", "value": {"stringValue": service_name}},
+        ]
+        # Mirror session onto the resource so Tempo/Grafana tag search finds it.
+        sid = attrs.get("session.id")
+        if sid:
+            resource_attrs.append(
+                {"key": "session.id", "value": {"stringValue": str(sid)}}
+            )
         body = {
             "resourceSpans": [
                 {
-                    "resource": {
-                        "attributes": [
-                            {
-                                "key": "service.name",
-                                "value": {"stringValue": service_name},
-                            }
-                        ]
-                    },
+                    "resource": {"attributes": resource_attrs},
                     "scopeSpans": [
                         {
                             "scope": {"name": "sallm", "version": "0.1.0"},
@@ -124,9 +127,7 @@ def otlp_http_sink(endpoint, service_name="sallm"):
                                     "kind": 1,  # INTERNAL
                                     "startTimeUnixNano": str(start_ns),
                                     "endTimeUnixNano": str(end_ns),
-                                    "attributes": _otlp_attributes(
-                                        event.get("attrs") or {}
-                                    ),
+                                    "attributes": _otlp_attributes(attrs),
                                     "status": {"code": 1},  # OK
                                 }
                             ],
@@ -275,14 +276,25 @@ class Tracer:
             otlp=False,
         )
 
-    def llm(self, model, metrics, content=None, reasoning=None, messages=None):
+    def llm(
+        self,
+        model,
+        metrics,
+        content=None,
+        reasoning=None,
+        messages=None,
+        *,
+        name="chat",
+        operation="chat",
+    ):
         metrics = metrics or {}
         content = content or ""
         reasoning = reasoning or ""
         end_ns = _now_ns()
         start_ns = end_ns - int((metrics.get("elapsed_ms") or 0) * 1_000_000)
+        span_name = name or "chat"
         attrs = {
-            "gen_ai.operation.name": "chat",
+            "gen_ai.operation.name": operation or "chat",
             "gen_ai.request.model": model or "",
             "gen_ai.usage.input_tokens": metrics.get("prompt_tokens", 0),
             "gen_ai.usage.output_tokens": metrics.get("completion_tokens", 0),
@@ -304,7 +316,7 @@ class Tracer:
             attrs,
             parent_id=self.turn_span_id,
             span_id=span_id,
-            name="chat",
+            name=span_name,
             start_ns=start_ns,
             end_ns=end_ns,
         )
@@ -386,7 +398,103 @@ class Tracer:
                 attrs["nudge.text"] = self._t(nudge)
         self._event("rejected", attrs, parent_id=self.turn_span_id, name="rejected")
 
-    def turn_end(self, answer, metrics, messages, stopped=None):
+    def control(self, decision):
+        """Emit a control/routing span (goal, skill action, retrieval query)."""
+        decision = decision or {}
+        if hasattr(decision, "__dict__") and not isinstance(decision, dict):
+            decision = {
+                "goal": getattr(decision, "goal", ""),
+                "action": getattr(decision, "action", ""),
+                "skill": getattr(decision, "skill", ""),
+                "retrieval_query": getattr(decision, "retrieval_query", ""),
+                "fallback": bool(getattr(decision, "fallback", False)),
+            }
+        attrs = {
+            "gen_ai.operation.name": "control",
+            "sallm.control.action": str(decision.get("action") or ""),
+            "sallm.control.skill": str(decision.get("skill") or ""),
+            "sallm.control.fallback": bool(decision.get("fallback")),
+            "sallm.goal": str(decision.get("goal") or ""),
+            "sallm.retrieval_query": str(decision.get("retrieval_query") or ""),
+        }
+        self._event(
+            "control",
+            attrs,
+            parent_id=self.turn_span_id,
+            name="control",
+        )
+        if self.metrics is not None:
+            self.metrics.observe_control(
+                action=attrs["sallm.control.action"],
+                skill=attrs["sallm.control.skill"],
+            )
+
+    @staticmethod
+    def _receipt_attrs(receipt) -> dict:
+        if receipt is None:
+            return {}
+        if hasattr(receipt, "as_dict"):
+            receipt = receipt.as_dict()
+        if not isinstance(receipt, dict):
+            return {}
+        sections = {s.get("name"): s for s in (receipt.get("sections") or []) if isinstance(s, dict)}
+        attrs = {
+            "sallm.receipt.budget": int(receipt.get("budget") or 0),
+            "sallm.receipt.total_tokens": int(receipt.get("total_tokens") or 0),
+            "sallm.receipt.omitted_messages": int(receipt.get("omitted_messages") or 0),
+            "sallm.receipt.fallbacks": list(receipt.get("fallbacks") or []),
+            "sallm.retrieval.hits": len(receipt.get("retrieved") or []),
+        }
+        for name in ("system", "retrieval", "history"):
+            sec = sections.get(name) or {}
+            attrs[f"sallm.receipt.{name}_tokens"] = int(sec.get("tokens") or 0)
+            if sec.get("note"):
+                attrs[f"sallm.receipt.{name}_note"] = str(sec.get("note"))
+        return attrs
+
+    @staticmethod
+    def _stack_attrs(stack, goal="") -> dict:
+        frames = []
+        for f in stack or []:
+            if hasattr(f, "skill"):
+                frames.append(
+                    {
+                        "skill": f.skill,
+                        "depth": getattr(f, "depth", len(frames)),
+                        "note": getattr(f, "note", "") or "",
+                    }
+                )
+            elif isinstance(f, dict):
+                frames.append(
+                    {
+                        "skill": f.get("skill") or "",
+                        "depth": f.get("depth", len(frames)),
+                        "note": f.get("note") or "",
+                    }
+                )
+        active = frames[-1]["skill"] if frames else ""
+        return {
+            "sallm.goal": goal or "",
+            "sallm.active_skill": active,
+            "sallm.stack.depth": len(frames),
+            "sallm.stack": frames,
+            "sallm.stack.path": " > ".join(f["skill"] for f in frames),
+        }
+
+    def turn_end(
+        self,
+        answer,
+        metrics,
+        messages,
+        stopped=None,
+        *,
+        stack=None,
+        goal="",
+        receipt=None,
+        control_decision=None,
+        gated_chunks: int = 0,
+        extract_miss_flush: bool = False,
+    ):
         metrics = metrics or {}
         end_ns = _now_ns()
         start_ns = self._turn_start_ns or end_ns
@@ -397,8 +505,19 @@ class Tracer:
             "gen_ai.usage.output_tokens": metrics.get("completion_tokens", 0),
             "gen_ai.usage.total_tokens": metrics.get("total_tokens", 0),
             "elapsed_ms": metrics.get("elapsed_ms", 0.0),
+            "sallm.memory.gated_chunks": int(gated_chunks or 0),
+            "sallm.extract.miss_flush": bool(extract_miss_flush),
             **self._context_attrs(messages),
+            **self._stack_attrs(stack, goal=goal),
+            **self._receipt_attrs(receipt),
         }
+        if control_decision is not None:
+            if hasattr(control_decision, "action"):
+                attrs["sallm.control.action"] = str(control_decision.action or "")
+                attrs["sallm.control.skill"] = str(control_decision.skill or "")
+            elif isinstance(control_decision, dict):
+                attrs["sallm.control.action"] = str(control_decision.get("action") or "")
+                attrs["sallm.control.skill"] = str(control_decision.get("skill") or "")
         if stopped:
             attrs["stopped"] = stopped
         if self.debug:
@@ -419,6 +538,12 @@ class Tracer:
                 metrics,
                 context_messages=len(messages or []),
             )
+            self.metrics.observe_stack(
+                depth=int(attrs.get("sallm.stack.depth") or 0),
+                active_skill=str(attrs.get("sallm.active_skill") or ""),
+                goal=str(attrs.get("sallm.goal") or ""),
+            )
+            self.metrics.observe_receipt(receipt)
         self.trace_id = None
         self.turn_span_id = None
         self._turn_start_ns = None

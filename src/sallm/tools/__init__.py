@@ -43,7 +43,7 @@ __all__ = [
     "tool_descriptions",
 ]
 
-BUILTIN_TOOL_NAMES = ("echo", "calc", "dig", "memory")
+BUILTIN_TOOL_NAMES = ("echo", "calc", "dig")
 DEFAULT_TOOLS = ("echo", "calc", "dig")
 
 
@@ -75,19 +75,12 @@ def _dig_tool() -> CliTool:
     )
 
 
-def builtin_tools(
-    names=None,
-    *,
-    memory_path=None,
-    memory_session=None,
-    memory_backend: str = "file",
-) -> dict[str, CliTool]:
+def builtin_tools(names=None) -> dict[str, CliTool]:
     """Build a registry of shipped tools.
 
     ``names``: iterable of tool names, or ``None`` / ``\"all\"`` for every
     built-in, or ``\"none\"`` / empty for ``{}``. Default chat set is
-    :data:`DEFAULT_TOOLS` (echo, calc, dig) — pass those explicitly or use
-    ``None`` only when you want all including memory.
+    :data:`DEFAULT_TOOLS` (echo, calc, dig).
     """
     if names is None or names == "all":
         wanted = list(BUILTIN_TOOL_NAMES)
@@ -113,12 +106,4 @@ def builtin_tools(
             out[name] = _calc_tool()
         elif name == "dig":
             out[name] = _dig_tool()
-        elif name == "memory":
-            from .memory import memory_tool
-
-            out[name] = memory_tool(
-                path=memory_path,
-                session=memory_session,
-                backend=memory_backend,
-            )
     return out
