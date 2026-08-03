@@ -2,7 +2,7 @@
 
 What happens when a single user turn (a meeting transcript, a “briefing”, or any dump) is **larger than the recent-history budget** — and why follow-up answers can look identical and empty (“the transcripts do not contain…”).
 
-This is the failure mode hit by `data/dale_questions.txt` and the e2e fixture `tests/fixtures/long_briefing_qa.txt`.
+This is the failure mode hit by `data/David_questions.txt` and the e2e fixture `tests/fixtures/long_briefing_qa.txt`.
 
 ---
 
@@ -30,7 +30,7 @@ From `ModelProfile` (Gemma 4 defaults):
 | `retrieval_tokens` | **800** | Cap for injected Lance hits |
 | embedding `top_k` | 4 (CLI often 4–6) | How many chunks compete for that 800 |
 
-A Dale-style transcript is often **~13k tokens** in one line. That is already ~7× the history budget.
+A David-style transcript is often **~13k tokens** in one line. That is already ~7× the history budget.
 
 ---
 
@@ -88,13 +88,13 @@ Once a few refusals sit in the 1800-token window:
 - The model pattern-matches to the same hedge.
 - Quality collapses even if better chunks are in Lance.
 
-Fresh sessions (`--session dale2`) hit the **same** budget math; “second call” is not a separate bug — it is the same eviction, sometimes with worse luck on retrieval.
+Fresh sessions (`--session David2`) hit the **same** budget math; “second call” is not a separate bug — it is the same eviction, sometimes with worse luck on retrieval.
 
 ---
 
 ## Script format makes this easy to trigger
 
-`sallm chat --script file.txt` sends **one non-empty line per turn**. Files like `dale_questions.txt` are:
+`sallm chat --script file.txt` sends **one non-empty line per turn**. Files like `David_questions.txt` are:
 
 1. short preamble  
 2. **one giant transcript line**  

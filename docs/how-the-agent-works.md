@@ -149,7 +149,7 @@ LanceDB returns top‑k hits (default 4). Each hit keeps `id`, text, score, and 
 
 ### 3b. Write-time memory gate
 
-After the answer, user text is chunked for indexing. With `--memory-gate` (default **on**), short interrogatives (e.g. “What is Dale’s birthday?”) are **not** written to SQLite/Lance—they pollute retrieval with near-duplicate questions. Long dumps and extractor `derived` facts always pass. Disable with `--no-memory-gate`. Gated chunk counts appear on turn traces as `sallm.memory.gated_chunks`.
+After the answer, user text is chunked for indexing. With `--memory-gate` (default **on**), short interrogatives (e.g. “What is David’s birthday?”) are **not** written to SQLite/Lance—they pollute retrieval with near-duplicate questions. Long dumps and extractor `derived` facts always pass. Disable with `--no-memory-gate`. Gated chunk counts appear on turn traces as `sallm.memory.gated_chunks`.
 
 ### 4. Budgeted prompt + ReAct
 
