@@ -27,12 +27,20 @@ def from_llm_result(result):
     }
 
 
-def summarize(metrics, context_messages=0):
-    """Flatten metrics for display."""
+def summarize(metrics, context_messages=0, prompt_messages=None):
+    """Flatten metrics for display.
+
+    context_messages: len of canonical Agent.messages transcript.
+    prompt_messages: len of the view sent to the LLM (after context optimizer).
+    When prompt_messages is omitted, it defaults to context_messages.
+    """
+    if prompt_messages is None:
+        prompt_messages = context_messages
     return {
         "prompt_tokens": metrics.get("prompt_tokens", 0),
         "completion_tokens": metrics.get("completion_tokens", 0),
         "total_tokens": metrics.get("total_tokens", 0),
         "elapsed_ms": round(metrics.get("elapsed_ms", 0.0), 1),
         "context_messages": context_messages,
+        "prompt_messages": prompt_messages,
     }

@@ -1,0 +1,777 @@
+{
+  "annotations": { "list": [] },
+  "description": "Session-filtered view of sallm turns: token economy (ContextReceipt), skill stack, tools, control routing, and Tempo traces. Select session_id from the CLI banner.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Session overview",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 0, "y": 1 },
+      "id": 1,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Turns",
+      "type": "stat",
+      "targets": [
+        { "expr": "sum(sallm_turns_total{session_id=~\"$session_id\"})", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 3, "y": 1 },
+      "id": 20,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value_and_name"
+      },
+      "title": "Active skill",
+      "description": "Prometheus gauge sallm_skill_active=1 for the skill on top of the stack.",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum by (skill) (sallm_skill_active{session_id=~\"$session_id\"} == 1)",
+          "legendFormat": "{{skill}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 7, "y": 1 },
+      "id": 21,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Stack depth",
+      "type": "stat",
+      "targets": [
+        { "expr": "max(sallm_stack_depth{session_id=~\"$session_id\"})", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 3000 },
+              { "color": "red", "value": 4096 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 10, "y": 1 },
+      "id": 22,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "title": "Receipt / budget",
+      "description": "Estimated prompt tokens vs ModelProfile.prompt_budget (ContextReceipt).",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "max(sallm_receipt_total_tokens{session_id=~\"$session_id\"})",
+          "legendFormat": "used",
+          "refId": "A"
+        },
+        {
+          "expr": "max(sallm_receipt_budget{session_id=~\"$session_id\"})",
+          "legendFormat": "budget",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 14, "y": 1 },
+      "id": 23,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Retrieval hits",
+      "type": "stat",
+      "targets": [
+        { "expr": "max(sallm_retrieval_hits{session_id=~\"$session_id\"})", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 3, "x": 17, "y": 1 },
+      "id": 24,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Omitted msgs",
+      "description": "History messages dropped by the prompt budget.",
+      "type": "stat",
+      "targets": [
+        { "expr": "max(sallm_receipt_omitted_messages{session_id=~\"$session_id\"})", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Tool calls",
+      "type": "stat",
+      "targets": [
+        { "expr": "sum(sallm_tool_calls_total{session_id=~\"$session_id\"})", "refId": "A" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "title": "Token economy",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "stacking": { "mode": "normal", "group": "A" },
+            "barAlignment": 0
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 30,
+      "title": "Prompt composition (receipt sections)",
+      "description": "Last ContextReceipt breakdown: system + retrieval + history. Watch history climb; retrieval should stay bounded.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (section) (sallm_receipt_section_tokens{session_id=~\"$session_id\"})",
+          "legendFormat": "{{section}}",
+          "refId": "A"
+        },
+        {
+          "expr": "max(sallm_receipt_budget{session_id=~\"$session_id\"})",
+          "legendFormat": "budget",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "stacking": { "mode": "normal", "group": "A" }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 9,
+      "title": "LLM tokens per interval (≈ per turn)",
+      "description": "increase() of counters. With a 5s scrape, each ask() usually shows as one bar.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(increase(sallm_tokens_input_total{session_id=~\"$session_id\"}[$__interval]))",
+          "legendFormat": "input",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(sallm_tokens_output_total{session_id=~\"$session_id\"}[$__interval]))",
+          "legendFormat": "output",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 14 },
+      "id": 5,
+      "title": "Tokens (cumulative)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(sallm_tokens_input_total{session_id=~\"$session_id\"})",
+          "legendFormat": "input",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(sallm_tokens_output_total{session_id=~\"$session_id\"})",
+          "legendFormat": "output",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(sallm_tokens_total{session_id=~\"$session_id\"})",
+          "legendFormat": "total",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 14 },
+      "id": 6,
+      "title": "LLM elapsed (cumulative ms)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(sallm_llm_elapsed_ms_sum{session_id=~\"$session_id\"})",
+          "legendFormat": "llm ms",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(sallm_tool_elapsed_ms_sum{session_id=~\"$session_id\"})",
+          "legendFormat": "tool ms",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 15 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 14 },
+      "id": 31,
+      "title": "Efficiency: tokens / turn & context size",
+      "description": "Avg LLM tokens per turn (total/turns) and transcript message count.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(sallm_tokens_total{session_id=~\"$session_id\"}) / clamp_min(sum(sallm_turns_total{session_id=~\"$session_id\"}), 1)",
+          "legendFormat": "avg tokens/turn",
+          "refId": "A"
+        },
+        {
+          "expr": "max(sallm_context_messages{session_id=~\"$session_id\"})",
+          "legendFormat": "context msgs",
+          "refId": "B"
+        },
+        {
+          "expr": "max(sallm_last_turn_total_tokens{session_id=~\"$session_id\"})",
+          "legendFormat": "last turn tokens",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+      "id": 102,
+      "title": "Stack, control, tools",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 22 },
+      "id": 40,
+      "title": "Skill stack depth",
+      "description": "Depth after each turn. Push/pop/replace from the controller move this.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "max(sallm_stack_depth{session_id=~\"$session_id\"})",
+          "legendFormat": "depth",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 50 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 22 },
+      "id": 41,
+      "title": "Control actions",
+      "description": "Controller routing: keep | push | pop | replace.",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (action) (sallm_control_actions_total{session_id=~\"$session_id\"})",
+          "legendFormat": "{{action}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 50 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 22 },
+      "id": 7,
+      "title": "Tool calls by name",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (tool, status) (sallm_tool_calls_total{session_id=~\"$session_id\"})",
+          "legendFormat": "{{tool}} {{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 30 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 30 },
+      "id": 42,
+      "title": "Active skill (1 = on top of stack)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (skill) (sallm_skill_active{session_id=~\"$session_id\"})",
+          "legendFormat": "{{skill}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "custom": { "drawStyle": "bars", "fillOpacity": 50 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 30 },
+      "id": 43,
+      "title": "Tool runtime (cumulative ms)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (tool) (sallm_tool_elapsed_ms_sum{session_id=~\"$session_id\"})",
+          "legendFormat": "{{tool}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "id": 104,
+      "title": "Extract / queue lens",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Active --extract mode. Prefer queue when extract latency is a large share of turn time and miss-flush stays low; prefer waterfall when miss-flush is frequent or queue depth climbs.",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 37 },
+      "id": 60,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "title": "Extract mode",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "max by (mode) (sallm_extract_mode{session_id=~\"$session_id\"})",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Pending deferred extract jobs. Growing depth across turns means backlog is not clearing on lazy drain — stay on waterfall or investigate.",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 4, "y": 37 },
+      "id": 61,
+      "title": "Queue depth",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "max(sallm_extract_queue_depth{session_id=~\"$session_id\"})",
+          "legendFormat": "pending",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Wall ms spent in extract LLM calls (increase over interval) vs last call. High extract share of turn time favors --extract queue.",
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 12, "y": 37 },
+      "id": 62,
+      "title": "Extract latency",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(increase(sallm_extract_elapsed_ms_sum{session_id=~\"$session_id\"}[$__rate_interval]))",
+          "legendFormat": "extract ms / interval",
+          "refId": "A"
+        },
+        {
+          "expr": "max(sallm_extract_last_elapsed_ms{session_id=~\"$session_id\"})",
+          "legendFormat": "last extract ms",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(increase(sallm_turn_elapsed_ms_sum{session_id=~\"$session_id\"}[$__rate_interval]))",
+          "legendFormat": "turn ms / interval",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Miss-driven drain + re-retrieve events in the selected range. Frequent flushes mean deferred extract is hurting recall turns — prefer waterfall.",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 2 }, { "color": "red", "value": 5 }] } },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 37 },
+      "id": 63,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "title": "Miss flushes",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(sallm_extract_miss_flush_total{session_id=~\"$session_id\"}[$__range]))",
+          "legendFormat": "miss flush",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "How backlog cleared: lazy (start of next ask) vs miss (empty retrieve forced drain). Healthy queue mode is mostly lazy.",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 50 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 45 },
+      "id": 64,
+      "title": "Drain mix",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(sallm_extract_drained_total{session_id=~\"$session_id\"}[$__rate_interval]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Grounded derived facts written by extract. Compare with extract calls to see empty-extract rate.",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 50 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 45 },
+      "id": 65,
+      "title": "Facts written",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(increase(sallm_extract_facts_total{session_id=~\"$session_id\"}[$__rate_interval]))",
+          "legendFormat": "facts",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(sallm_extract_calls_total{session_id=~\"$session_id\"}[$__rate_interval]))",
+          "legendFormat": "extract calls",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 51 },
+      "id": 103,
+      "title": "Traces (Tempo via HTTP search)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "tempo-http" },
+      "description": "Grafana 11 stubs TraceQL search on /api/ds/query; this panel calls Tempo /api/search directly. Click Trace ID → Explore waterfall (stack/goal/receipt on the ask span).",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Trace ID" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open in Tempo",
+                    "url": "",
+                    "targetBlank": true,
+                    "internal": {
+                      "datasourceUid": "tempo",
+                      "datasourceName": "Tempo",
+                      "query": {
+                        "query": "${__value.raw}",
+                        "queryType": "traceql"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 52 },
+      "id": 8,
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": { "show": false }
+      },
+      "title": "Ask traces for session",
+      "type": "table",
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "root_selector": "traces",
+          "url": "http://tempo:3200/api/search",
+          "url_options": {
+            "method": "GET",
+            "data": "",
+            "params": [
+              { "key": "limit", "value": "50" },
+              {
+                "key": "q",
+                "value": "{ resource.service.name = \"sallm\" && name = \"ask\" && span.session.id =~ \"$session_id\" }"
+              }
+            ]
+          },
+          "columns": [
+            { "selector": "traceID", "text": "Trace ID", "type": "string" },
+            { "selector": "rootTraceName", "text": "Name", "type": "string" },
+            { "selector": "rootServiceName", "text": "Service", "type": "string" },
+            { "selector": "durationMs", "text": "Duration ms", "type": "number" }
+          ],
+          "filters": []
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "tempo-http" },
+      "description": "Tool spans for this session (gen_ai.operation.name = execute_tool).",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Trace ID" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open in Tempo",
+                    "url": "",
+                    "targetBlank": true,
+                    "internal": {
+                      "datasourceUid": "tempo",
+                      "datasourceName": "Tempo",
+                      "query": {
+                        "query": "${__value.raw}",
+                        "queryType": "traceql"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 62 },
+      "id": 50,
+      "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false } },
+      "title": "Tool traces",
+      "type": "table",
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "root_selector": "traces",
+          "url": "http://tempo:3200/api/search",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              { "key": "limit", "value": "50" },
+              {
+                "key": "q",
+                "value": "{ resource.service.name = \"sallm\" && span.gen_ai.operation.name = \"execute_tool\" && span.session.id =~ \"$session_id\" }"
+              }
+            ]
+          },
+          "columns": [
+            { "selector": "traceID", "text": "Trace ID", "type": "string" },
+            { "selector": "rootTraceName", "text": "Name", "type": "string" },
+            { "selector": "durationMs", "text": "Duration ms", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "tempo-http" },
+      "description": "Control/routing spans (goal, skill action, retrieval_query).",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Trace ID" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open in Tempo",
+                    "url": "",
+                    "targetBlank": true,
+                    "internal": {
+                      "datasourceUid": "tempo",
+                      "datasourceName": "Tempo",
+                      "query": {
+                        "query": "${__value.raw}",
+                        "queryType": "traceql"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 62 },
+      "id": 51,
+      "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false } },
+      "title": "Control traces",
+      "type": "table",
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "root_selector": "traces",
+          "url": "http://tempo:3200/api/search",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              { "key": "limit", "value": "50" },
+              {
+                "key": "q",
+                "value": "{ resource.service.name = \"sallm\" && name = \"control\" && span.session.id =~ \"$session_id\" }"
+              }
+            ]
+          },
+          "columns": [
+            { "selector": "traceID", "text": "Trace ID", "type": "string" },
+            { "selector": "rootTraceName", "text": "Name", "type": "string" },
+            { "selector": "durationMs", "text": "Duration ms", "type": "number" }
+          ]
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["sallm", "session", "tokens", "stack"],
+  "templating": {
+    "list": [
+      {
+        "current": { "text": ".*", "value": ".*" },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(sallm_turns_total, session_id)",
+        "includeAll": true,
+        "allValue": ".*",
+        "label": "session_id",
+        "name": "session_id",
+        "query": {
+          "query": "label_values(sallm_turns_total, session_id)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "title": "sallm session",
+  "uid": "sallm-session",
+  "version": 6
+}

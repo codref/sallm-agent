@@ -1,10 +1,12 @@
-"""Chat-app tools — registered by the CLI, not by the sallm library."""
+"""calc — evaluate a sandboxed math expression."""
 
+from __future__ import annotations
+
+import argparse
 import ast
 import math
 import operator
-
-from sallm.tools import intermediate
+import sys
 
 _BIN_OPS = {
     ast.Add: operator.add,
@@ -34,15 +36,7 @@ _SAFE_FUNCS = {
     )
     if hasattr(math, name)
 }
-_SAFE_FUNCS.update(
-    {
-        "abs": abs,
-        "round": round,
-        "min": min,
-        "max": max,
-        "sum": sum,
-    }
-)
+_SAFE_FUNCS.update({"abs": abs, "round": round, "min": min, "max": max, "sum": sum})
 _SAFE_CONSTS = {
     "pi": math.pi,
     "e": math.e,
@@ -96,8 +90,7 @@ class _SafeMath(ast.NodeVisitor):
             raise ValueError(f"disallowed function: {node.func.id}")
         if node.keywords:
             raise ValueError("keyword arguments are not allowed")
-        args = [self.visit(a) for a in node.args]
-        return fn(*args)
+        return fn(*[self.visit(a) for a in node.args])
 
     def visit_Compare(self, node):
         left = self.visit(node.left)
@@ -123,13 +116,7 @@ class _SafeMath(ast.NodeVisitor):
         return True
 
 
-def calc(expression=""):
-    """Evaluate a math expression in a sandbox.
-
-    Use only for numeric or math evaluation the user asked you to compute.
-    Examples: 'sqrt(2) + 3**2', 'sin(pi/2)', '2**10'.
-    Do not use for non-math questions.
-    """
+def evaluate(expression: str) -> str:
     expression = (expression or "").strip()
     if not expression:
         return "Error: empty expression"
@@ -141,41 +128,25 @@ def calc(expression=""):
     return str(result)
 
 
-CHAT_TOOLS = {
-    "calc": calc,
-}
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="calc",
+        description=(
+            "Evaluate a math expression in a sandbox. "
+            "Examples: 'sqrt(2) + 3**2', 'sin(pi/2)', '2**10'."
+        ),
+    )
+    parser.add_argument(
+        "--expression",
+        "-e",
+        required=True,
+        help="Math expression to evaluate",
+    )
+    args = parser.parse_args(argv)
+    out = evaluate(args.expression)
+    sys.stdout.write(out + ("\n" if not out.endswith("\n") else ""))
+    return 1 if out.startswith("Error:") else 0
 
 
-# --- fake multi-step tool ---------------------------------------------------
-
-_DIG_PROGRESS = {}
-
-
-def reset_dig_state():
-    """Clear dig progress (e.g. on /clear)."""
-    _DIG_PROGRESS.clear()
-
-
-def dig(site="default"):
-    """Dig at a site for treasure. Needs several digs at the same site.
-
-    Early calls return intermediate results (prefixed with [intermediate]).
-    Keep calling dig with the same site until you get a final non-intermediate result.
-    Do not invent the treasure — only report what dig returns.
-    """
-    site = (site or "default").strip() or "default"
-    n = _DIG_PROGRESS.get(site, 0) + 1
-    _DIG_PROGRESS[site] = n
-    if n == 1:
-        return intermediate(
-            f"At '{site}' you found loose soil. Dig again at the same site."
-        )
-    if n == 2:
-        return intermediate(
-            f"At '{site}' you uncovered a locked chest. Dig once more at the same site."
-        )
-    _DIG_PROGRESS[site] = 0
-    return f"At '{site}' you found gold coins worth 42."
-
-
-CHAT_TOOLS["dig"] = dig
+if __name__ == "__main__":
+    raise SystemExit(main())

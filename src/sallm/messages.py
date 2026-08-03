@@ -6,20 +6,9 @@ def user(content):
     return {"role": "user", "content": content}
 
 
-def assistant(content, tool_calls=None):
-    msg = {"role": "assistant", "content": content}
-    if tool_calls:
-        msg["tool_calls"] = tool_calls
-    return msg
+def assistant(content):
+    return {"role": "assistant", "content": content}
 
 
 def system(content):
     return {"role": "system", "content": content}
-
-
-def tool(content, tool_call_id):
-    return {
-        "role": "tool",
-        "tool_call_id": tool_call_id,
-        "content": content,
-    }

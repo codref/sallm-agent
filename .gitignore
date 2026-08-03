@@ -12,3 +12,6 @@ build/
 *.egg
 .DS_Store
 uv.lock
+/data
+.sallm-lancedb/
+.sallm*

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "target_model": "ollama/gemma4:e4b-it-qat",
+  "instructions": {
+    "controller": "",
+    "extractor": "",
+    "converse": "",
+    "rewriter": ""
+  },
+  "demonstrations": {
+    "controller": "",
+    "extractor": "",
+    "converse": "",
+    "rewriter": ""
+  },
+  "budgets": {},
+  "metadata": {
+    "dataset_fingerprint": "baseline",
+    "seed": 0,
+    "note": "Empty baseline profile — optimizer fills instructions when run."
+  }
+}
