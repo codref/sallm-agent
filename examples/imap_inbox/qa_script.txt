@@ -1,0 +1,74 @@
+# IMAP durable-session QA script
+# --------------------------------
+# One non-empty, non-# line = one agent.ask turn.
+#
+# Goal: discover mail → anchor short facts → filler chatter (evict history) →
+# recall without re-fetch → deep fetch one body → more filler → recall body detail.
+#
+# Edit REPLACE_* placeholders to match your inbox before running:
+#   docker compose up -d   # Tempo + Prometheus + Grafana
+#   uv run python examples/imap_inbox/agent.py --script examples/imap_inbox/qa_script.txt --show-receipt
+#
+# Watch Grafana http://localhost:3000 → "sallm session" → session_id=imap-demo
+# (OTLP :4318 and metrics :9464 are enabled by default on this example.)
+#
+# After the run, restart with the same --session to prove SQLite/Lance resume:
+#   uv run python examples/imap_inbox/agent.py --session imap-demo
+# Then ask: What email facts do you still remember from earlier?
+
+# === Phase 1: Discover (live IMAP tools) ===
+List my IMAP folders.
+Search the INBOX for the 8 most recent messages and summarize From, Subject, Date, and UID for each.
+What is the From address and Subject of the most recent message you found?
+What UID did that most recent message have?
+Search INBOX for mail FROM "REPLACE_SENDER" and list up to 5 matches.
+What subjects did you find for REPLACE_SENDER?
+
+# === Phase 2: Anchor (nudge extract toward short durable facts) ===
+Remember these durable email facts from what you just found: the most recent From, Subject, Date, and UID, plus any REPLACE_SENDER subjects. Keep them as short grounded facts.
+
+# === Phase 3: Filler (push early turns out of the ~1800-token recent-history window) ===
+What is a calm color for a reading lamp?
+Name three quiet outdoor hobbies.
+Is tea usually served hot or cold in the morning?
+Suggest a short stretch for someone who sat too long.
+What sound does rain make on a tin roof — in one sentence?
+Recommend a simple weeknight pasta idea without listing a full recipe.
+Is the Pacific Ocean larger than the Atlantic?
+Name a constellation visible in many northern skies.
+What is a polite way to decline a meeting?
+Describe a library in one gentle sentence.
+Why do people like walking after dinner?
+Name two kitchen herbs that pair with tomatoes.
+What time of day feels slowest to you — just pick one and say why briefly.
+Is cork a good material for coasters?
+Suggest a low-stakes weekend plan under thirty words.
+What is the point of a bookmark?
+Name a river famous in Europe.
+Do houseplants prefer sudden drafts — yes or no, briefly?
+What makes a good notebook for quick lists?
+Is dusk usually cooler than noon?
+Offer one tip for keeping a desk tidy.
+Name a fruit that travels well.
+What is a soft synonym for "busy"?
+Describe blue sky weather in six words.
+
+# === Phase 4: Recall (must rely on durable memory / retrieval, not recent history) ===
+Without searching IMAP again: what was the From and Subject of the most recent message we discussed earlier?
+Without searching IMAP again: what UID did that most recent message have?
+Without searching IMAP again: what subjects did we find for REPLACE_SENDER?
+
+# === Phase 5: Deep fetch + more filler + recall ===
+Fetch the full details for that most recent UID from INBOX and tell me one concrete detail from the body snippet (a name, date, amount, or link host — whatever appears).
+Remember that body detail as a durable fact.
+What is a good indoor plant for low light?
+Name two board games suitable for two players.
+Is oatmeal a breakfast food?
+Suggest a short playlist mood for deep work — one phrase.
+What does a kettle whistle mean?
+Without fetching mail again: what body detail did we save from that message?
+
+# === Phase 6: Optional interactive check ===
+# Stop here, or continue in the REPL with /context and /memory.
+# Expect: receipt total_tokens stable (not growing with transcript length),
+# and retrieved hits on the recall turns above.

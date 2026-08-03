@@ -17,6 +17,10 @@ uv sync --extra dev
 
 Core deps include `peewee` (SQLite ORM) and `lancedb` (vector index). There is **no** DSPy/Pydantic dependency.
 
+## Examples
+
+- [`examples/imap_inbox/`](examples/imap_inbox/) — durable IMAP inbox Q&A (CLI tools + long-session recall). See the docstring in `agent.py`.
+
 ## Turn pipeline
 
 ```
