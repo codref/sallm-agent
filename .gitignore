@@ -15,3 +15,4 @@ uv.lock
 /data
 .sallm-lancedb/
 .sallm*
+examples/**/.env
