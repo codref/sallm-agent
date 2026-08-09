@@ -1,0 +1,63 @@
+# Linux shell-history QA script
+# -----------------------------
+# One non-empty, non-# line = one agent.ask turn.
+#
+# Phases: discover → story inference → anchor → filler → recall → execute.
+#
+# Edit REPLACE_SEED to a substring you know appears in your history
+# (e.g. docker, ssh, git, kubectl). Story questions need zsh extended history
+# (timestamps) for --days filters to work well.
+#
+#   docker compose up -d
+#   uv run python examples/linux_history/agent.py \
+#     --script examples/linux_history/qa_script.txt --show-receipt
+#
+# Grafana: http://localhost:3000 → sallm session → session_id=hist-demo
+#
+# Resume later:
+#   uv run python examples/linux_history/agent.py --session hist-demo
+
+# === Phase 1: Discover ===
+Show my 15 most recent shell history commands with times if available.
+Search history for git and list up to 10 matches.
+What was the single most recent command you found, including its index and time?
+
+# === Phase 2: Story inference (usage pattern) ===
+Around the time I was working with REPLACE_SEED, I also used some remote command. Search the last 30 days of history for REPLACE_SEED with nearby context, then look for related ssh, scp, or curl commands. Infer a short usage story and tell me any hostname or IP that appears grounded in those history rows.
+If you found a hostname or IP, state it clearly in one line as HostOrIP: <value>.
+
+# === Phase 3: Anchor durable facts ===
+Remember these durable facts from what you just found: the most recent command index/time/text, plus any HostOrIP or remote-related commands from the REPLACE_SEED story. Keep them short and grounded.
+
+# === Phase 4: Filler (evict recent-history window) ===
+What is a calm color for a reading lamp?
+Name three quiet outdoor hobbies.
+Is tea usually served hot or cold in the morning?
+Suggest a short stretch for someone who sat too long.
+What sound does rain make on a tin roof — in one sentence?
+Recommend a simple weeknight pasta idea without listing a full recipe.
+Is the Pacific Ocean larger than the Atlantic?
+Name a constellation visible in many northern skies.
+What is a polite way to decline a meeting?
+Describe a library in one gentle sentence.
+Why do people like walking after dinner?
+Name two kitchen herbs that pair with tomatoes.
+What time of day feels slowest — pick one briefly.
+Is cork a good material for coasters?
+Suggest a low-stakes weekend plan under thirty words.
+What is the point of a bookmark?
+Name a river famous in Europe.
+Do houseplants prefer sudden drafts — yes or no, briefly?
+What makes a good notebook for quick lists?
+Is dusk usually cooler than noon?
+
+# === Phase 5: Recall (no hist_search) ===
+Without searching history again: what was the most recent command index and text we discussed earlier?
+Without searching history again: what HostOrIP or remote endpoint did we extract from the REPLACE_SEED story?
+
+# === Phase 6: Live execute + short recall ===
+Run a harmless bash command to print the current working directory and the date, then summarize the exit code and output in one sentence.
+Remember that working directory as a durable fact.
+What is a good indoor plant for low light?
+Name two board games suitable for two players.
+Without running bash again: what working directory did we just record?
