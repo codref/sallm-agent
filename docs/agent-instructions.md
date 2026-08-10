@@ -114,8 +114,40 @@ stack = result["stack"]      # list[{"skill", "depth", "note"}]
 
 - Construct **one** `Agent` per session (or reuse after restart with same paths/ids).
 - Call `agent.ask(text)` for each user turn — do not manually append to `agent.messages` for durable mode.
+- Call `agent.remember(text, source=…)` to **preload meaning** into session memory (LLM interprets the block into English facts, indexes them). Ingest stays out of the recent-history window. Prefer moderate blocks (~1–2k tokens), not whole dumps.
 - `agent.clear()` wipes the session in SQLite + vectors and resets to root skill `converse`.
-- Without `state_path`, the agent falls back to an in-memory legacy loop (full transcript + optional trim). Prefer `state_path` for anything longer than a few turns.
+- Without `state_path`, the agent falls back to an in-memory legacy loop (full transcript + optional trim). Prefer `state_path` for anything longer than a few turns. `remember()` requires durable state.
+
+### `remember()` — meaning-first ingest
+
+Use when the app has source text that should be searchable later in **ordinary English** (e.g. shell-history blocks). Raw argv/log lines often fail dense retrieval; `remember` runs an ingest LLM prompt, stores grounded facts, and indexes those.
+
+```python
+agent = Agent(
+    tools={},
+    state_path=".sallm/state.db",
+    vector_path=".sallm/vectors",
+    session_id="ops",
+)
+info = agent.remember(
+    "docker login\nssh deploy@203.0.113.10\n",
+    source="zsh_history:1200-1210",
+)
+# info["facts"], info["fact_texts"], info["message_id"]
+# later:
+agent.ask("What remote host did I use after docker login?")
+```
+
+| Key | Meaning |
+|-----|---------|
+| `message_id` | Canonical ingest message id |
+| `facts` / `fact_texts` | Grounded English units written |
+| `raw_chunks` | Only if `index_raw=True` |
+| `usage` | Ingest LLM usage |
+
+`remember_many([...])` batches strings or `{text, source}` dicts. Do **not** poke SQLite/Lance from app code.
+
+The ingest prompt defaults to built-in `INGEST_INSTRUCTION`. Override via compiled profile keys `instructions.ingest` / `demonstrations.ingest` (alias `remember` accepted). Optimize offline with `sallm optimize --task ingest`.
 
 ---
 

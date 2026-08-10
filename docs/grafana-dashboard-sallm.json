@@ -544,6 +544,292 @@
     {
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 51 },
+      "id": 70,
+      "title": "Remember / ingest",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Agent.remember() meaning-ingest invocations in the selected range.",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 52 },
+      "id": 71,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
+      "title": "Remember calls",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(sallm_remember_calls_total{session_id=~\"$session_id\"}[$__range]))",
+          "legendFormat": "calls",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Prompt / completion tokens on the latest remember() LLM call.",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 52 },
+      "id": 72,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "title": "Last remember tokens",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "max(sallm_remember_last_input_tokens{session_id=~\"$session_id\"})",
+          "legendFormat": "in",
+          "refId": "A"
+        },
+        {
+          "expr": "max(sallm_remember_last_output_tokens{session_id=~\"$session_id\"})",
+          "legendFormat": "out",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Facts written on the latest remember() call.",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 52 },
+      "id": 73,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "title": "Last facts",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "max(sallm_remember_last_facts{session_id=~\"$session_id\"})",
+          "legendFormat": "facts",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Source characters and optional raw chunks indexed by remember() in range.",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 52 },
+      "id": 74,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "title": "Source volume",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(sallm_remember_chars_total{session_id=~\"$session_id\"}[$__range]))",
+          "legendFormat": "chars",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(sallm_remember_raw_chunks_total{session_id=~\"$session_id\"}[$__range]))",
+          "legendFormat": "raw chunks",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Avg facts per remember call in range (efficiency of meaning extract).",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 2, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 52 },
+      "id": 75,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "title": "Facts / call",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(sallm_remember_facts_total{session_id=~\"$session_id\"}[$__range])) / clamp_min(sum(increase(sallm_remember_calls_total{session_id=~\"$session_id\"}[$__range])), 1)",
+          "legendFormat": "avg",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Remember-only LLM token cost (also folded into Token economy totals via operation=remember).",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2, "stacking": { "mode": "normal" } } },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 56 },
+      "id": 76,
+      "title": "Remember tokens",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(increase(sallm_remember_tokens_input_total{session_id=~\"$session_id\"}[$__rate_interval]))",
+          "legendFormat": "input",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(sallm_remember_tokens_output_total{session_id=~\"$session_id\"}[$__rate_interval]))",
+          "legendFormat": "output",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(increase(sallm_remember_tokens_total{session_id=~\"$session_id\"}[$__rate_interval]))",
+          "legendFormat": "total",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Wall ms for remember() interpreter LLM vs last call.",
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 56 },
+      "id": 77,
+      "title": "Remember latency",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(increase(sallm_remember_elapsed_ms_sum{session_id=~\"$session_id\"}[$__rate_interval]))",
+          "legendFormat": "remember ms / interval",
+          "refId": "A"
+        },
+        {
+          "expr": "max(sallm_remember_last_elapsed_ms{session_id=~\"$session_id\"})",
+          "legendFormat": "last remember ms",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Grounded facts from remember vs ingest calls. Empty extracts show as calls without facts.",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 50 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 64 },
+      "id": 78,
+      "title": "Remember facts vs calls",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(increase(sallm_remember_facts_total{session_id=~\"$session_id\"}[$__rate_interval]))",
+          "legendFormat": "facts",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(sallm_remember_calls_total{session_id=~\"$session_id\"}[$__rate_interval]))",
+          "legendFormat": "calls",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Cumulative remember token counters for the session.",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 64 },
+      "id": 79,
+      "title": "Remember tokens (cumulative)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(sallm_remember_tokens_input_total{session_id=~\"$session_id\"})",
+          "legendFormat": "input",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(sallm_remember_tokens_output_total{session_id=~\"$session_id\"})",
+          "legendFormat": "output",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(sallm_remember_tokens_total{session_id=~\"$session_id\"})",
+          "legendFormat": "total",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "tempo-http" },
+      "description": "Standalone remember spans (Agent.remember meaning ingest). Token attrs on gen_ai.usage.* and sallm.remember.*.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Trace ID" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open in Tempo",
+                    "url": "",
+                    "targetBlank": true,
+                    "internal": {
+                      "datasourceUid": "tempo",
+                      "datasourceName": "Tempo",
+                      "query": {
+                        "query": "${__value.raw}",
+                        "queryType": "traceql"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 70 },
+      "id": 80,
+      "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false } },
+      "title": "Remember traces",
+      "type": "table",
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "root_selector": "traces",
+          "url": "http://tempo:3200/api/search",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              { "key": "limit", "value": "50" },
+              {
+                "key": "q",
+                "value": "{ resource.service.name = \"sallm\" && name = \"remember\" && span.session.id =~ \"$session_id\" }"
+              }
+            ]
+          },
+          "columns": [
+            { "selector": "traceID", "text": "Trace ID", "type": "string" },
+            { "selector": "rootTraceName", "text": "Name", "type": "string" },
+            { "selector": "durationMs", "text": "Duration ms", "type": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 78 },
       "id": 103,
       "title": "Traces (Tempo via HTTP search)",
       "type": "row"
@@ -581,7 +867,7 @@
           }
         ]
       },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 52 },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 79 },
       "id": 8,
       "options": {
         "showHeader": true,
@@ -651,7 +937,7 @@
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 62 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 89 },
       "id": 50,
       "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false } },
       "title": "Tool traces",
@@ -714,7 +1000,7 @@
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 62 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 89 },
       "id": 51,
       "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false } },
       "title": "Control traces",
@@ -754,13 +1040,13 @@
       {
         "current": { "text": ".*", "value": ".*" },
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "definition": "label_values(sallm_turns_total, session_id)",
+        "definition": "label_values({__name__=~\"sallm_turns_total|sallm_remember_calls_total\"}, session_id)",
         "includeAll": true,
         "allValue": ".*",
         "label": "session_id",
         "name": "session_id",
         "query": {
-          "query": "label_values(sallm_turns_total, session_id)",
+          "query": "label_values({__name__=~\"sallm_turns_total|sallm_remember_calls_total\"}, session_id)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,
@@ -773,5 +1059,5 @@
   "timezone": "browser",
   "title": "sallm session",
   "uid": "sallm-session",
-  "version": 6
+  "version": 7
 }

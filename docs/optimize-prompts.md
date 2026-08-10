@@ -2,7 +2,7 @@
 
 This guide covers two related knobs:
 
-1. **Prompt profiles** — instructions (and optional demos) for controller, extractor, converse, and rewriter, searched offline and saved as neutral JSON.
+1. **Prompt profiles** — instructions (and optional demos) for controller, extractor, ingest (`Agent.remember`), converse, and rewriter, searched offline and saved as neutral JSON.
 2. **Runtime parameters** — token budgets, retrieval mode, top‑k, chunk size, and related CLI flags you tune by hand (or later bake into profile `budgets`).
 
 `sallm chat` never optimizes at startup. It only **loads** a profile. Search runs via `sallm optimize`.
@@ -16,7 +16,8 @@ There is no DSPy dependency. The search borrows the idea of propose → evaluate
 | Piece | Role | Optimized by |
 |-------|------|----------------|
 | **Controller** instruction | Goal / skill / `retrieval_query` JSON | `sallm optimize --task controller` |
-| **Extractor** instruction | Grounded facts JSON | `--task extractor` |
+| **Extractor** instruction | Grounded facts JSON (turn extract) | `--task extractor` |
+| **Ingest** instruction | Meaning-first facts from `Agent.remember` blocks | `--task ingest` |
 | **Converse** instruction | Extra system guidance for the main ReAct skill | `--task converse` |
 | **Rewriter** instruction | Standalone retrieval sentence (when used) | `--task rewriter` |
 | **Demonstrations** | Few-shot examples in the profile | Filled by search when present; often empty at first |
@@ -66,13 +67,14 @@ One JSON object per line:
 {"id": "c1", "task": "controller", "input": {"user": "What was the lab code?"}, "expected": {"action": "keep", "skill": "converse"}, "mandatory": true}
 {"id": "c2", "task": "controller", "input": {"user": "hi"}, "expected": {"action": "keep"}, "mandatory": false}
 {"id": "e1", "task": "extractor", "input": {"transcript": "[1] user: code is ZEBRA-7711"}, "expected": {"contains": ["ZEBRA"]}, "mandatory": false}
+{"id": "i1", "task": "ingest", "input": {"transcript": "[1] ingest: docker login then ssh deploy@203.0.113.10"}, "expected": {"contains": ["203.0.113.10"]}, "mandatory": false}
 {"id": "a1", "task": "converse", "input": {"user": "Say hello briefly"}, "expected": {"contains": ["hello", "hi"]}, "mandatory": false}
 ```
 
 | Field | Meaning |
 |-------|---------|
 | `id` | Stable case id (optional; auto `case-N` if missing) |
-| `task` | `controller` \| `extractor` \| `converse` \| `rewriter` (must match `--task`, unless `--task all`) |
+| `task` | `controller` \| `extractor` \| `ingest` \| `converse` \| `rewriter` (must match `--task`, unless `--task all`) |
 | `input` | Free-form dict shown to the model as `Input: …` |
 | `expected` | For JSON tasks: fields that must match exactly (`action`, `skill`, …). For text tasks: `{"contains": ["needle", …]}` |
 | `mandatory` | If `true`, a miss scores as a hard failure (−∞); average wins cannot hide it |
@@ -144,10 +146,14 @@ Example shape (schema version 1):
   "schema_version": 1,
   "target_model": "ollama/gemma4:e4b-it-qat",
   "instructions": {
-    "controller": "You route a long-running local agent. Reply with ONE JSON object…"
+    "controller": "You route a long-running local agent. Reply with ONE JSON object…",
+    "extractor": "",
+    "ingest": ""
   },
   "demonstrations": {
-    "controller": ""
+    "controller": "",
+    "extractor": "",
+    "ingest": ""
   },
   "budgets": {},
   "metadata": {
@@ -167,7 +173,7 @@ Runtime load path:
 - Default packaged file: `sallm/profiles/gemma4-e4b-v1.json` (empty instructions = built-in baselines)
 - Library: `CompiledProfile.load(path)` passed into `Agent(..., compiled_profile=…)`
 
-Empty instruction strings are ignored; non-empty `converse` text is prepended into the system prompt; controller/extractor instructions replace the built-in control prompts when provided.
+Empty instruction strings are ignored; non-empty `converse` text is prepended into the system prompt; controller/extractor/ingest instructions replace the built-in control prompts when provided (`ingest` → `Agent.remember` / `INGEST_INSTRUCTION`).
 
 **Do not** put DSPy modules, pickles, or Pydantic models in this file. Only portable strings and numbers.
 

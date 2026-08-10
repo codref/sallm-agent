@@ -11,7 +11,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class Case:
     id: str
-    task: str  # controller | extractor | converse | rewriter
+    task: str  # controller | extractor | ingest | converse | rewriter
     input: dict
     expected: dict
     mandatory: bool = False

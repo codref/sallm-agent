@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-# Kinds that always index (extractor output, etc.).
-_ALWAYS = frozenset({"fact", "derived"})
+# Kinds that always index (extractor output, app ingest, etc.).
+_ALWAYS = frozenset({"fact", "derived", "ingest"})
 
 
 @runtime_checkable

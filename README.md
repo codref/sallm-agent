@@ -20,6 +20,7 @@ Core deps include `peewee` (SQLite ORM) and `lancedb` (vector index). There is *
 ## Examples
 
 - [`examples/imap_inbox/`](examples/imap_inbox/) — durable IMAP inbox Q&A (CLI tools + long-session recall). See the docstring in `agent.py`.
+- [`examples/linux_history/`](examples/linux_history/) — durable bash/zsh history Q&A + live `bash_run` (usage-story inference). See the docstring in `agent.py`.
 
 ## Turn pipeline
 
@@ -58,6 +59,8 @@ print(result["goal"], result["stack"])
 ```
 
 Resume by reusing `state_path` + `session_id`.
+
+**Preload memory (meaning-first):** `agent.remember(text, source="…")` runs an ingest LLM prompt, stores English facts for retrieval, and does **not** fill the recent-history window. Use for shell-history blocks and other raw dumps that should answer ordinary-English questions later. See [docs/agent-instructions.md](docs/agent-instructions.md).
 
 ### VectorStore contract
 

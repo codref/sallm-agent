@@ -4,12 +4,14 @@
   "instructions": {
     "controller": "",
     "extractor": "",
+    "ingest": "",
     "converse": "",
     "rewriter": ""
   },
   "demonstrations": {
     "controller": "",
     "extractor": "",
+    "ingest": "",
     "converse": "",
     "rewriter": ""
   },
@@ -17,6 +19,6 @@
   "metadata": {
     "dataset_fingerprint": "baseline",
     "seed": 0,
-    "note": "Empty baseline profile — optimizer fills instructions when run."
+    "note": "Empty baseline profile — optimizer fills instructions when run. Empty ingest uses built-in INGEST_INSTRUCTION."
   }
 }

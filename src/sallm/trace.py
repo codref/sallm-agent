@@ -330,6 +330,54 @@ class Tracer:
             )
         return span_id
 
+    def remember(
+        self,
+        *,
+        source: str = "",
+        chars: int = 0,
+        facts: int = 0,
+        raw_chunks: int = 0,
+        usage=None,
+    ):
+        """JSONL/OTLP marker for Agent.remember (meaning-first ingest)."""
+        usage = usage or {}
+        end_ns = _now_ns()
+        start_ns = end_ns - int((usage.get("elapsed_ms") or 0) * 1_000_000)
+        attrs = {
+            "gen_ai.operation.name": "remember",
+            "sallm.remember.source": source or "",
+            "sallm.remember.chars": int(chars or 0),
+            "sallm.remember.facts": int(facts or 0),
+            "sallm.remember.raw_chunks": int(raw_chunks or 0),
+            "gen_ai.usage.input_tokens": usage.get("prompt_tokens", 0),
+            "gen_ai.usage.output_tokens": usage.get("completion_tokens", 0),
+            "gen_ai.usage.total_tokens": usage.get("total_tokens", 0)
+            or (
+                int(usage.get("prompt_tokens") or 0)
+                + int(usage.get("completion_tokens") or 0)
+            ),
+            "elapsed_ms": usage.get("elapsed_ms", 0.0),
+        }
+        self._event(
+            "remember",
+            attrs,
+            parent_id=None,
+            span_id=_span_id(),
+            name="remember",
+            start_ns=start_ns,
+            end_ns=end_ns,
+        )
+        if self.metrics is not None:
+            self.metrics.observe_remember(
+                chars=chars,
+                facts=facts,
+                raw_chunks=raw_chunks,
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0),
+                total_tokens=usage.get("total_tokens", 0),
+                elapsed_ms=usage.get("elapsed_ms", 0.0),
+            )
+
     def tool(
         self,
         name,

@@ -20,7 +20,9 @@ def register(app: typer.Typer):
         model: str = typer.Option(DEFAULT_MODEL, "--model", "-m"),
         api_base: str = typer.Option(DEFAULT_API_BASE, "--api-base"),
         task: str = typer.Option(
-            "controller", "--task", help="controller|extractor|converse"
+            "controller",
+            "--task",
+            help="controller|extractor|ingest|converse|rewriter",
         ),
         candidates: int = typer.Option(4, "--candidates"),
         seed: int = typer.Option(0, "--seed"),
@@ -29,7 +31,12 @@ def register(app: typer.Typer):
         ),
     ):
         """Search/evaluate a neutral compiled prompt profile (offline)."""
-        from sallm.control import CONTROL_INSTRUCTION, EXTRACT_INSTRUCTION, _parse_json
+        from sallm.control import (
+            CONTROL_INSTRUCTION,
+            EXTRACT_INSTRUCTION,
+            INGEST_INSTRUCTION,
+            _parse_json,
+        )
         from sallm.optimization import (
             Candidate,
             load_jsonl,
@@ -38,17 +45,32 @@ def register(app: typer.Typer):
             successive_halving,
         )
 
-        cases = [c for c in load_jsonl(dataset) if c.task == task or task == "all"]
+        cases = [
+            c
+            for c in load_jsonl(dataset)
+            if task == "all"
+            or c.task == task
+            or (task in ("ingest", "remember") and c.task in ("ingest", "remember"))
+        ]
         if not cases:
             raise typer.BadParameter(f"no cases for task={task!r} in {dataset}")
 
         baselines = {
             "controller": CONTROL_INSTRUCTION,
             "extractor": EXTRACT_INSTRUCTION,
+            "ingest": INGEST_INSTRUCTION,
+            "remember": INGEST_INSTRUCTION,
             "converse": "Answer the user clearly and briefly.",
             "rewriter": "Rewrite the user turn as a short retrieval query sentence.",
         }
+        if task not in baselines and task != "all":
+            raise typer.BadParameter(
+                f"unknown task={task!r}; choose from "
+                f"{', '.join(k for k in baselines if k != 'remember')}"
+            )
         baseline = baselines.get(task, baselines["converse"])
+        # Normalize alias into the profile key used at runtime.
+        profile_task = "ingest" if task == "remember" else task
 
         def predict_fn(case, instruction, demos):
             prompt = instruction
@@ -84,7 +106,7 @@ def register(app: typer.Typer):
 
         texts = propose_instructions(
             baseline=baseline,
-            task=task,
+            task=profile_task,
             model=model,
             api_base=api_base,
             n=candidates,
@@ -99,8 +121,8 @@ def register(app: typer.Typer):
         save_artifact(
             out,
             target_model=model,
-            instructions={task: winner.instruction},
-            demonstrations={task: winner.demos},
+            instructions={profile_task: winner.instruction},
+            demonstrations={profile_task: winner.demos},
             budgets={},
             dataset_fingerprint=report["dataset_fingerprint"],
             metrics=report.get("final") or {},

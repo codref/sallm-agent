@@ -10,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import metrics as metrics_mod
-from .control import Controller, MemoryExtractor
+from .control import Controller, MemoryExtractor, INGEST_INSTRUCTION
 from .extract_queue import ExtractScheduler, normalize_extract_mode, should_miss_flush
 from .legacy_ask import ask_legacy
 from .memory import (
@@ -39,6 +39,14 @@ from .skills import SkillRegistry
 from .state import SessionRepository
 from .tools import normalize_registry, tool_descriptions
 from .turn import TurnRunner, apply_stack_decision
+
+
+def _nonempty(value) -> str | None:
+    """Return stripped string if non-empty; else None (use built-in baseline)."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
 
 
 class Agent:
@@ -143,11 +151,18 @@ class Agent:
 
         ctrl_i = None
         ext_i = None
+        ingest_i = None
         if compiled_profile:
-            ctrl_i = compiled_profile.instructions.get("controller")
-            ext_i = compiled_profile.instructions.get("extractor")
+            ctrl_i = _nonempty(compiled_profile.instructions.get("controller"))
+            ext_i = _nonempty(compiled_profile.instructions.get("extractor"))
+            ingest_i = _nonempty(
+                compiled_profile.instructions.get("ingest")
+            ) or _nonempty(compiled_profile.instructions.get("remember"))
         self.controller = Controller(self.profile, instruction=ctrl_i)
         self.extractor = MemoryExtractor(self.profile, instruction=ext_i)
+        self.ingest_interpreter = MemoryExtractor(
+            self.profile, instruction=ingest_i or INGEST_INSTRUCTION
+        )
         if self.repo is not None and self.indexer is not None:
             session_metrics = getattr(self.trace, "metrics", None) if self.trace else None
             self.extracts = ExtractScheduler(
@@ -197,6 +212,10 @@ class Agent:
             return
         loaded = []
         for m in self.repo.list_messages(self.session_id):
+            # App-fed ingest stays in SQLite for grounding but must not fill
+            # the verbatim recent-history window (see Agent.remember).
+            if (m.kind or "chat").strip().lower() == "ingest":
+                continue
             if m.role == "assistant":
                 loaded.append(assistant(m.content))
             elif m.role == "system":
@@ -224,6 +243,133 @@ class Agent:
             on_clear = getattr(ctx, "on_clear", None)
             if on_clear is not None:
                 on_clear()
+
+    def remember(
+        self,
+        text: str,
+        *,
+        source: str | None = None,
+        index_raw: bool = False,
+    ) -> dict:
+        """Meaning-first ingest: store source, LLM-interpret, index English facts.
+
+        Does not run ReAct and does not append to the recent-history window.
+        Requires a durable session (``state_path``).
+        """
+        if self.repo is None or self.indexer is None:
+            raise RuntimeError(
+                "remember() requires a durable Agent (pass state_path=...); "
+                "legacy in-memory mode has no session memory store."
+            )
+        body = (text or "").strip()
+        if not body:
+            raise ValueError("remember() text must be non-empty")
+
+        header = f"[ingest source={source}]\n" if source else "[ingest]\n"
+        content = header + body
+        stored = self.repo.append_message(
+            self.session_id,
+            role="user",
+            content=content,
+            kind="ingest",
+        )
+
+        raw_chunks = 0
+        gated = 0
+        if index_raw:
+            stored_chunks = self.indexer.add_text(
+                self.session_id,
+                content,
+                chunks=self.chunker.chunk(content),
+                source_message_id=stored.id,
+                kind="ingest",
+            )
+            raw_chunks = len(stored_chunks)
+            gated = int(self.indexer.last_gated or 0)
+
+        # Cap what we send to the interpreter (cost / quality).
+        snippet_body = body if len(body) <= 8000 else body[:8000] + "\n… [truncated]"
+        snippet = f"[{stored.id}] ingest: {snippet_body}"
+        demos = ""
+        if self.compiled_profile:
+            demos = str(
+                self.compiled_profile.demonstrations.get("ingest")
+                or self.compiled_profile.demonstrations.get("remember")
+                or self.compiled_profile.demonstrations.get("extractor")
+                or ""
+            )
+        facts, ext_result = self.ingest_interpreter.extract(
+            transcript_snippet=snippet,
+            valid_message_ids={stored.id},
+            demos=demos,
+        )
+        usage = metrics_mod.from_llm_result(ext_result)
+        if self.trace is not None:
+            self.trace.llm(
+                model=self.model,
+                metrics=usage,
+                content=ext_result.get("content") or "",
+                name="remember",
+                operation="remember",
+            )
+
+        fact_texts: list[str] = []
+        for fact in facts:
+            self.repo.add_derived(
+                self.session_id, fact.text, fact.source_message_ids
+            )
+            self.indexer.add_text(
+                self.session_id,
+                fact.text,
+                chunks=[fact.text],
+                source_message_id=fact.source_message_ids[0],
+                kind="fact",
+            )
+            fact_texts.append(fact.text)
+
+        if self.trace is not None and hasattr(self.trace, "remember"):
+            self.trace.remember(
+                source=source or "",
+                chars=len(body),
+                facts=len(fact_texts),
+                raw_chunks=raw_chunks,
+                usage=usage,
+            )
+
+        return {
+            "message_id": stored.id,
+            "facts": len(fact_texts),
+            "fact_texts": fact_texts[:20],
+            "raw_chunks": raw_chunks,
+            "gated": gated,
+            "source": source,
+            "usage": usage,
+        }
+
+    def remember_many(
+        self,
+        items: list,
+        *,
+        index_raw: bool = False,
+    ) -> list[dict]:
+        """Call :meth:`remember` for each string or ``{text, source?}`` dict."""
+        results: list[dict] = []
+        for item in items or []:
+            if isinstance(item, str):
+                results.append(self.remember(item, index_raw=index_raw))
+            elif isinstance(item, dict):
+                results.append(
+                    self.remember(
+                        str(item.get("text") or ""),
+                        source=item.get("source"),
+                        index_raw=index_raw,
+                    )
+                )
+            else:
+                raise TypeError(
+                    f"remember_many items must be str or dict, got {type(item)}"
+                )
+        return results
 
     @property
     def goal(self) -> str:

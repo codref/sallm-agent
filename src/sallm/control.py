@@ -64,6 +64,20 @@ Only include facts supported by the listed source message ids.
 If nothing durable, return {"facts":[]}.
 """
 
+INGEST_INSTRUCTION = """Interpret ingested content for durable agent memory.
+The content may be shell history, logs, notes, or other raw blocks — not a chat turn.
+Reply with ONE JSON object only:
+{"facts":[{"text":"...","source_message_ids":[1]}]}
+Rules:
+- Write short English facts a future search can retrieve (hosts, IPs, users, repos,
+  images, paths, timestamps, tools used, brief usage patterns).
+- Prefer ordinary English over raw command lines
+  (e.g. "User ran docker login then ssh to 203.0.113.10").
+- Every fact MUST cite source_message_ids that appear in the ingest block
+  (usually the single ingest message id).
+- If nothing durable, return {"facts":[]}. Do not invent hosts or IPs.
+"""
+
 
 class Controller:
     def __init__(self, profile: ModelProfile, *, instruction: str | None = None):

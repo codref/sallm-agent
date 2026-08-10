@@ -62,6 +62,7 @@ curl -s localhost:9464/metrics | head
 | **Token economy** | Prompt composition (`system` / `retrieval` / `history`), tokens per turn, cumulative tokens, LLM vs tool latency, avg tokens/turn |
 | **Stack, control, tools** | Stack depth over time, control actions (`keep`/`push`/`pop`/`replace`), tool calls + runtime by name, active skill gauge |
 | **Extract / queue lens** | Extract mode, queue depth, extract vs turn latency, miss flushes, drain mix (`lazy`/`miss`), facts vs extract calls |
+| **Remember / ingest** | `Agent.remember()` calls, last tokens/facts, source volume, remember token rate + cumulative, latency, facts vs calls, Tempo `remember` spans |
 | **Traces (Tempo)** | `ask` traces for the session; separate lists for **tool** and **control** spans |
 
 #### Choosing `--extract waterfall` vs `queue`
@@ -85,6 +86,20 @@ Extract-related Prometheus series (session_id label):
 | `sallm_extract_calls_total` / `sallm_extract_elapsed_ms_sum` | Extract LLM count / wall ms |
 | `sallm_extract_last_elapsed_ms` | Latest extract duration |
 | `sallm_extract_facts_total` | Grounded derived facts written |
+
+Remember / ingest Prometheus series (`Agent.remember()`, session_id label):
+
+| Metric | Meaning |
+|--------|---------|
+| `sallm_remember_calls_total` | Meaning-ingest invocations |
+| `sallm_remember_facts_total` | Grounded facts written by remember |
+| `sallm_remember_chars_total` | Source characters fed in |
+| `sallm_remember_raw_chunks_total` | Raw chunks indexed when `index_raw=True` |
+| `sallm_remember_tokens_input_total` / `_output_total` / `_total` | Interpreter LLM tokens |
+| `sallm_remember_last_input_tokens` / `_output_tokens` / `_facts` | Latest call gauges |
+| `sallm_remember_elapsed_ms_sum` / `sallm_remember_last_elapsed_ms` | Interpreter wall ms |
+
+These tokens also appear in the overall `sallm_tokens_*` counters (via `operation=remember` LLM spans). Use the remember-specific series to isolate ingest cost from turn ReAct.
 
 Ask-span attr: `sallm.extract.miss_flush` (bool) when that turn forced a miss flush.
 
@@ -110,6 +125,7 @@ Open an `ask` span in Explore to read attributes:
 - `sallm.control.action` / `sallm.control.skill`
 
 Child spans under each turn: `control`, `chat` (ReAct), `extract`, `tool <name>`.
+Standalone root span: `remember` (meaning-first ingest outside ask).
 
 PromQL examples:
 
@@ -122,12 +138,15 @@ sum by (tool, status) (sallm_tool_calls_total{session_id="YOUR_SESSION"})
 max(sallm_extract_queue_depth{session_id="YOUR_SESSION"})
 sum(increase(sallm_extract_miss_flush_total{session_id="YOUR_SESSION"}[1h]))
 sum by (reason) (sallm_extract_drained_total{session_id="YOUR_SESSION"})
+sum(increase(sallm_remember_tokens_total{session_id="YOUR_SESSION"}[1h]))
+sum(increase(sallm_remember_facts_total{session_id="YOUR_SESSION"}[1h]))
 ```
 
 TraceQL (Explore → Tempo, or Infinity panels on the dashboard):
 
 ```traceql
 { resource.service.name = "sallm" && name = "ask" && span.session.id = "<paste from CLI>" }
+{ resource.service.name = "sallm" && name = "remember" && span.session.id = "<id>" }
 { resource.service.name = "sallm" && name = "control" && span.session.id = "<id>" }
 { resource.service.name = "sallm" && span.gen_ai.operation.name = "execute_tool" && span.session.id = "<id>" }
 ```
