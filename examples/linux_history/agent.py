@@ -28,7 +28,7 @@ Disable with --no-otlp and --metrics-port 0.
 
 WARNING: bash_run executes real commands as your user.
 
-Slash commands: /help /clear /context /memory /stack /quit
+Slash commands: /help /clear /context /memory /stack /feed [N] /remember /quit
 
 Requires: Ollama with gemma4:e4b-it-qat and qwen3-embedding:0.6b.
 """
@@ -36,6 +36,7 @@ Requires: Ollama with gemma4:e4b-it-qat and qwen3-embedding:0.6b.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -92,6 +93,19 @@ def build_tools() -> dict[str, CliTool]:
                 "NEVER invent hosts/IPs — only report tool output."
             ),
         ),
+        "hist_ingest": CliTool(
+            name="hist_ingest",
+            argv=[py, str(HERE / "hist_ingest.py")],
+            summary=(
+                "Queue shell-history blocks for meaning-first Agent.remember "
+                "(LLM turns commands into English facts in durable memory). "
+                "Flags: --query TEXT --mode token|semantic --limit N --days N "
+                "--context K --block-lines N, or --latest N (newest N commands, "
+                "no search; up to 2000) to load a large remember phase. "
+                "Use when the user asks to index/load/remember history into memory. "
+                "Not for live command execution."
+            ),
+        ),
         "bash_run": CliTool(
             name="bash_run",
             argv=[py, str(HERE / "bash_run.py")],
@@ -115,29 +129,26 @@ SHELL_SKILL = Skill(
     description=(
         "User asks about past shell commands, bash/zsh history, console scripting, "
         "or reconstructing what they did on a past day (usage patterns, docker auth, "
-        "ssh hosts, IPs). Also when they want a command executed live."
+        "ssh hosts, IPs). Also when they want history indexed into durable memory, "
+        "or a command executed live."
     ),
     prompt=(
         "Active skill: shell.\n"
         "You help with bash/zsh history and console scripting.\n"
-        "Past activity: always use hist_search via ```run blocks. "
-        "Keyword lookups (e.g. git, docker, ssh): "
-        "hist_search --query <word> --mode token --limit N "
-        "(default token mode — do not use substr). "
-        "Vague / natural-language memories: "
-        "hist_search --query \"...\" --mode semantic --limit N. "
-        "For day-level stories (\"docker auth… remote host\"): "
-        "hist_search --query <seed> --days N --context 8 --limit 20, "
-        "then optionally a second search for ssh/scp/curl. "
-        "Infer a short usage story from the rows; extract hostnames, IPs, users, "
-        "images, paths — ONLY if they appear in tool output. "
-        "If nothing matches, say so clearly.\n"
-        "Live execution: bash_run --command \"...\". Prefer harmless commands unless "
-        "the user explicitly asks for something else.\n"
-        "Keep answers short. Prefer durable facts (cmd, time, host/IP). "
-        "Never dump large outputs or whole history files into the reply."
+        "Past activity: use hist_search via ```run blocks. "
+        "Keyword lookups: hist_search --query <word> --mode token --limit N. "
+        "Vague memories: hist_search --query \"...\" --mode semantic --limit N. "
+        "To store history as English-retrievable memory (hosts, IPs, patterns): "
+        "hist_ingest --query <seed> --limit 40 --context 4 — the runtime will "
+        "call Agent.remember (LLM meaning extract). For a large bulk load of "
+        "recent activity: hist_ingest --latest 200 (or larger). Prefer ingest "
+        "before long English story questions about past ops.\n"
+        "For day-level stories after ingest: answer from memory; re-search only "
+        "if needed. Do not invent hosts/IPs.\n"
+        "Live execution: bash_run --command \"...\".\n"
+        "Keep answers short. Never dump whole history files."
     ),
-    tools=("hist_search", "bash_run"),
+    tools=("hist_search", "hist_ingest", "bash_run"),
 )
 
 
@@ -208,16 +219,52 @@ def build_agent(session_id: str, trace: Tracer | None = None) -> Agent:
 def print_help() -> None:
     console.print(
         Panel(
-            "[bold]/help[/]     this help\n"
-            "[bold]/clear[/]    wipe this session (SQLite + vectors)\n"
-            "[bold]/context[/]  last ContextReceipt (token budget)\n"
-            "[bold]/memory[/]   chunk / derived-fact counts\n"
-            "[bold]/stack[/]    active skill stack\n"
-            "[bold]/quit[/]     exit",
+            "[bold]/help[/]         this help\n"
+            "[bold]/clear[/]        wipe this session (SQLite + vectors)\n"
+            "[bold]/context[/]      last ContextReceipt (token budget)\n"
+            "[bold]/memory[/]       chunk / derived-fact counts\n"
+            "[bold]/stack[/]        active skill stack\n"
+            "[bold]/feed[/] [N]     queue newest N history cmds → remember "
+            "(default 120)\n"
+            "[bold]/remember[/]     drain pending hist_ingest → agent.remember\n"
+            "[bold]/quit[/]         exit",
             title="commands",
             border_style="dim",
         )
     )
+
+
+def drain_pending_remember(agent: Agent) -> list[dict]:
+    """Apply blocks queued by hist_ingest via Agent.remember (meaning-first)."""
+    pending = HERE / ".sallm" / "pending_remember.jsonl"
+    if not pending.is_file():
+        return []
+    lines = pending.read_text(encoding="utf-8").splitlines()
+    pending.unlink(missing_ok=True)
+    items = []
+    for raw in lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        text = str(obj.get("text") or "").strip()
+        if not text:
+            continue
+        items.append({"text": text, "source": obj.get("source")})
+    if not items:
+        return []
+    console.print(
+        f"[dim]remember[/] ingesting {len(items)} history block(s) (LLM meaning)…"
+    )
+    results = agent.remember_many(items)
+    for r in results:
+        n = r.get("facts") or 0
+        src = r.get("source") or ""
+        console.print(f"[dim]remember[/] {src}: facts={n}")
+    return results
 
 
 def print_context(agent: Agent) -> None:
@@ -289,6 +336,34 @@ def handle_slash(agent: Agent, line: str) -> bool:
         print_memory(agent)
     elif cmd == "/stack":
         print_stack(agent)
+    elif cmd == "/feed":
+        # Simulate a larger remember phase: newest N cmds → pending → remember.
+        from hist_ingest import queue_latest_blocks, write_pending
+
+        n = 120
+        if len(parts) > 1:
+            try:
+                n = int(parts[1].strip().split()[0])
+            except (ValueError, IndexError):
+                console.print("[red]/feed needs an integer N[/]  (e.g. /feed 200)")
+                return False
+        path, blocks = queue_latest_blocks(n=n)
+        if not blocks:
+            console.print("[dim]no history to feed[/]")
+            return False
+        write_pending(blocks)
+        console.print(
+            f"[dim]feed[/] queued {len(blocks)} block(s) from newest {n} "
+            f"cmds ({path.name})"
+        )
+        drain_pending_remember(agent)
+    elif cmd == "/remember":
+        results = drain_pending_remember(agent)
+        if not results:
+            console.print(
+                "[dim]nothing pending — try /feed 200, or ask the agent to "
+                "hist_ingest[/]"
+            )
     else:
         console.print(f"[red]unknown command:[/] {cmd}  (try /help)")
     return False
@@ -444,11 +519,11 @@ def main(argv: list[str] | None = None) -> int:
             f"session: [cyan]{args.session}[/]\n"
             f"state:   [cyan]{STATE_DB}[/]\n"
             f"vectors: [cyan]{VECTOR_DIR}[/]\n"
-            f"tools:   [cyan]hist_search, bash_run[/]\n"
+            f"tools:   [cyan]hist_search, hist_ingest, bash_run[/]\n"
             + "\n".join(tel_bits)
             + "\n"
             "[yellow]bash_run executes real commands as your user[/]\n"
-            "type /help — history stories use hist_search --days/--context",
+            "hist_ingest /feed → Agent.remember (English facts). type /help",
             border_style="green",
         )
     )
@@ -473,6 +548,7 @@ def main(argv: list[str] | None = None) -> int:
                 continue
 
         print_result(result, show_receipt=args.show_receipt)
+        drain_pending_remember(agent)
 
     return 0
 

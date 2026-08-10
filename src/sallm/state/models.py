@@ -41,7 +41,7 @@ class Message(BaseModel):
     session = ForeignKeyField(Session, backref="messages", on_delete="CASCADE")
     role = CharField()
     content = TextField()
-    kind = CharField(default="chat")  # chat | tool | nudge | system
+    kind = CharField(default="chat")  # chat | tool | nudge | system | ingest
     created_at = FloatField()
     seq = IntegerField()  # order within session
 
@@ -62,7 +62,7 @@ class MemoryChunk(BaseModel):
     session = ForeignKeyField(Session, backref="chunks", on_delete="CASCADE")
     source_message_id = IntegerField(null=True)
     text = TextField()
-    kind = CharField(default="raw")  # raw | derived
+    kind = CharField(default="raw")  # raw | derived | fact | ingest
     indexed = BooleanField(default=False)
     created_at = FloatField()
 

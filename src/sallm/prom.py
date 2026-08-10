@@ -96,6 +96,19 @@ class SessionMetrics:
         self.extract_elapsed_ms_sum = 0.0
         self.extract_last_elapsed_ms = 0.0
         self.extract_facts_total = 0
+        # Meaning-first Agent.remember() ingest.
+        self.remember_calls_total = 0
+        self.remember_facts_total = 0
+        self.remember_chars_total = 0
+        self.remember_raw_chunks_total = 0
+        self.remember_elapsed_ms_sum = 0.0
+        self.remember_last_elapsed_ms = 0.0
+        self.remember_tokens_input_total = 0
+        self.remember_tokens_output_total = 0
+        self.remember_tokens_total = 0
+        self.remember_last_input_tokens = 0
+        self.remember_last_output_tokens = 0
+        self.remember_last_facts = 0
         self._httpd = None
         self._thread = None
 
@@ -204,6 +217,36 @@ class SessionMetrics:
             self.extract_elapsed_ms_sum += ms
             self.extract_last_elapsed_ms = ms
             self.extract_facts_total += int(facts or 0)
+
+    def observe_remember(
+        self,
+        *,
+        chars=0,
+        facts=0,
+        raw_chunks=0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=0,
+        elapsed_ms=0.0,
+    ):
+        """Record one Agent.remember() meaning-ingest call."""
+        inp = int(prompt_tokens or 0)
+        out = int(completion_tokens or 0)
+        total = int(total_tokens or (inp + out))
+        with self._lock:
+            self.remember_calls_total += 1
+            self.remember_facts_total += int(facts or 0)
+            self.remember_chars_total += int(chars or 0)
+            self.remember_raw_chunks_total += int(raw_chunks or 0)
+            ms = float(elapsed_ms or 0.0)
+            self.remember_elapsed_ms_sum += ms
+            self.remember_last_elapsed_ms = ms
+            self.remember_tokens_input_total += inp
+            self.remember_tokens_output_total += out
+            self.remember_tokens_total += total
+            self.remember_last_input_tokens = inp
+            self.remember_last_output_tokens = out
+            self.remember_last_facts = int(facts or 0)
 
     def observe_extract_queue(
         self,
@@ -377,6 +420,98 @@ class SessionMetrics:
             )
             lines.append(
                 f"sallm_extract_facts_total{_labels(**slab)} {self.extract_facts_total}"
+            )
+            lines.append(
+                "# HELP sallm_remember_calls_total Agent.remember() ingest invocations."
+            )
+            lines.append("# TYPE sallm_remember_calls_total counter")
+            lines.append(
+                f"sallm_remember_calls_total{_labels(**slab)} {self.remember_calls_total}"
+            )
+            lines.append(
+                "# HELP sallm_remember_facts_total Grounded facts written by remember()."
+            )
+            lines.append("# TYPE sallm_remember_facts_total counter")
+            lines.append(
+                f"sallm_remember_facts_total{_labels(**slab)} {self.remember_facts_total}"
+            )
+            lines.append(
+                "# HELP sallm_remember_chars_total Source characters fed to remember()."
+            )
+            lines.append("# TYPE sallm_remember_chars_total counter")
+            lines.append(
+                f"sallm_remember_chars_total{_labels(**slab)} {self.remember_chars_total}"
+            )
+            lines.append(
+                "# HELP sallm_remember_raw_chunks_total Raw source chunks indexed by remember()."
+            )
+            lines.append("# TYPE sallm_remember_raw_chunks_total counter")
+            lines.append(
+                f"sallm_remember_raw_chunks_total{_labels(**slab)} "
+                f"{self.remember_raw_chunks_total}"
+            )
+            lines.append(
+                "# HELP sallm_remember_elapsed_ms_sum Wall ms spent in remember() LLM."
+            )
+            lines.append("# TYPE sallm_remember_elapsed_ms_sum counter")
+            lines.append(
+                f"sallm_remember_elapsed_ms_sum{_labels(**slab)} "
+                f"{self.remember_elapsed_ms_sum}"
+            )
+            lines.append(
+                "# HELP sallm_remember_last_elapsed_ms Latest remember() LLM duration (ms)."
+            )
+            lines.append("# TYPE sallm_remember_last_elapsed_ms gauge")
+            lines.append(
+                f"sallm_remember_last_elapsed_ms{_labels(**slab)} "
+                f"{self.remember_last_elapsed_ms}"
+            )
+            lines.append(
+                "# HELP sallm_remember_tokens_input_total Prompt tokens for remember() LLM."
+            )
+            lines.append("# TYPE sallm_remember_tokens_input_total counter")
+            lines.append(
+                f"sallm_remember_tokens_input_total{_labels(**slab)} "
+                f"{self.remember_tokens_input_total}"
+            )
+            lines.append(
+                "# HELP sallm_remember_tokens_output_total Completion tokens for remember() LLM."
+            )
+            lines.append("# TYPE sallm_remember_tokens_output_total counter")
+            lines.append(
+                f"sallm_remember_tokens_output_total{_labels(**slab)} "
+                f"{self.remember_tokens_output_total}"
+            )
+            lines.append(
+                "# HELP sallm_remember_tokens_total Total tokens for remember() LLM."
+            )
+            lines.append("# TYPE sallm_remember_tokens_total counter")
+            lines.append(
+                f"sallm_remember_tokens_total{_labels(**slab)} "
+                f"{self.remember_tokens_total}"
+            )
+            lines.append(
+                "# HELP sallm_remember_last_input_tokens Prompt tokens on latest remember()."
+            )
+            lines.append("# TYPE sallm_remember_last_input_tokens gauge")
+            lines.append(
+                f"sallm_remember_last_input_tokens{_labels(**slab)} "
+                f"{self.remember_last_input_tokens}"
+            )
+            lines.append(
+                "# HELP sallm_remember_last_output_tokens Completion tokens on latest remember()."
+            )
+            lines.append("# TYPE sallm_remember_last_output_tokens gauge")
+            lines.append(
+                f"sallm_remember_last_output_tokens{_labels(**slab)} "
+                f"{self.remember_last_output_tokens}"
+            )
+            lines.append(
+                "# HELP sallm_remember_last_facts Facts written on latest remember()."
+            )
+            lines.append("# TYPE sallm_remember_last_facts gauge")
+            lines.append(
+                f"sallm_remember_last_facts{_labels(**slab)} {self.remember_last_facts}"
             )
             for skill, active in self._skills.items():
                 lab = _labels(session_id=sid, skill=skill)

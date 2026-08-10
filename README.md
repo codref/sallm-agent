@@ -60,6 +60,8 @@ print(result["goal"], result["stack"])
 
 Resume by reusing `state_path` + `session_id`.
 
+**Preload memory (meaning-first):** `agent.remember(text, source="…")` runs an ingest LLM prompt, stores English facts for retrieval, and does **not** fill the recent-history window. Use for shell-history blocks and other raw dumps that should answer ordinary-English questions later. See [docs/agent-instructions.md](docs/agent-instructions.md).
+
 ### VectorStore contract
 
 Implement `upsert` / `search` / `delete_session` / `close` (see `sallm.memory.types.VectorStore`). Default: `LanceVectorStore`. A future **pgvector** adapter can satisfy the same dataclasses (`VectorRecord`, `VectorQuery`, `VectorHit`) without changing the agent.

@@ -17,6 +17,7 @@ def test_heuristic_rejects_short_questions():
     assert gate.accept("x" * 400, kind="raw")  # long dump
     assert gate.accept("Dale birthday is March 3", kind="derived")
     assert gate.accept("fact line?", kind="fact")  # always kinds
+    assert gate.accept("short ingest?", kind="ingest")
     assert not gate.accept("", kind="raw")
 
 
