@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/sallm-logo.png" alt="SALLM logo" width="160" />
+</p>
+
 # sallm-agent
 
 Minimal tool-calling agent (`sallm`) for **local small LLMs** (default: Gemma 4 4B via Ollama).
@@ -143,3 +147,7 @@ When a script turn (briefing / transcript) is larger than the history budget: [d
 Offline prompt/parameter tuning: [docs/optimize-prompts.md](docs/optimize-prompts.md).
 
 Skills (selection, stack, tools): [docs/skills.md](docs/skills.md).
+
+## License
+
+[MIT](LICENSE)

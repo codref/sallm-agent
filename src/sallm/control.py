@@ -17,6 +17,11 @@ def _parse_json(text: str) -> dict | None:
     raw = (text or "").strip()
     if not raw:
         return None
+    # Strip common fences before parse.
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, count=1, flags=re.IGNORECASE)
+        raw = re.sub(r"\s*```\s*$", "", raw)
+        raw = raw.strip()
     try:
         obj = json.loads(raw)
         return obj if isinstance(obj, dict) else None
@@ -25,11 +30,68 @@ def _parse_json(text: str) -> dict | None:
     m = _JSON_RE.search(raw)
     if not m:
         return None
+    blob = m.group(0)
     try:
-        obj = json.loads(m.group(0))
+        obj = json.loads(blob)
         return obj if isinstance(obj, dict) else None
     except json.JSONDecodeError:
+        # Truncated completion: close open strings/arrays/objects best-effort.
+        repaired = _repair_truncated_json(blob)
+        if repaired is None:
+            return None
+        try:
+            obj = json.loads(repaired)
+            return obj if isinstance(obj, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+
+def _repair_truncated_json(blob: str) -> str | None:
+    """Best-effort close of truncated JSON objects (common under token caps)."""
+    if not blob or not blob.lstrip().startswith("{"):
         return None
+    s = blob.rstrip()
+    # Drop a trailing incomplete key/value fragment after the last safe comma/bracket.
+    # If we end mid-string, close the string.
+    in_str = False
+    escape = False
+    stack: list[str] = []
+    last_complete = 0
+    for i, ch in enumerate(s):
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+                last_complete = i + 1
+            continue
+        if ch == '"':
+            in_str = True
+            continue
+        if ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+            last_complete = i + 1
+        elif ch in "}]":
+            if stack and stack[-1] == ch:
+                stack.pop()
+            last_complete = i + 1
+        elif ch in ",:":
+            last_complete = i + 1
+    if in_str:
+        s = s + '"'
+        last_complete = len(s)
+    # Trim to last complete structural point when truncated mid-token.
+    if last_complete and last_complete < len(s) and not s.endswith(("}", "]")):
+        trim = s[:last_complete].rstrip()
+        if trim.endswith(","):
+            trim = trim[:-1]
+        s = trim
+    # Close remaining open containers.
+    while stack:
+        s += stack.pop()
+    return s
 
 
 @dataclass(frozen=True)
@@ -67,14 +129,16 @@ If nothing durable, return {"facts":[]}.
 INGEST_INSTRUCTION = """Interpret ingested content for durable agent memory.
 The content may be shell history, logs, notes, or other raw blocks — not a chat turn.
 Reply with ONE JSON object only:
-{"facts":[{"text":"...","source_message_ids":[1]}]}
+{"facts":[{"text":"...","source_message_ids":[ID]}]}
 Rules:
-- Write short English facts a future search can retrieve (hosts, IPs, users, repos,
-  images, paths, timestamps, tools used, brief usage patterns).
+- Write 3–12 short English facts a future search can retrieve (hosts, IPs, users,
+  repos, images, paths, timestamps, tools used, brief usage patterns).
 - Prefer ordinary English over raw command lines
   (e.g. "User ran docker login then ssh to 203.0.113.10").
-- Every fact MUST cite source_message_ids that appear in the ingest block
-  (usually the single ingest message id).
+- Do NOT emit one fact per history line; densify related commands.
+- Every fact MUST set source_message_ids to the ingest message id shown in
+  brackets at the start of the transcript (e.g. [42] → use [42]).
+  Never use shell-history line numbers as message ids.
 - If nothing durable, return {"facts":[]}. Do not invent hosts or IPs.
 """
 
@@ -107,6 +171,7 @@ class Controller:
             messages=[user(prompt)],
             api_base=self.profile.api_base,
             max_tokens=self.profile.control_max_tokens,
+            think=False,
         )
         data = _parse_json(result.get("content") or "")
         allowed = {"keep", "push", "pop", "replace"}
@@ -150,6 +215,8 @@ class MemoryExtractor:
         transcript_snippet: str,
         valid_message_ids: set[int],
         demos: str = "",
+        max_tokens: int | None = None,
+        auto_ground: bool = False,
     ) -> tuple[list[ExtractedFact], dict]:
         prompt = f"{self.instruction}\n"
         if demos:
@@ -159,12 +226,21 @@ class MemoryExtractor:
             model=self.profile.model,
             messages=[user(prompt)],
             api_base=self.profile.api_base,
-            max_tokens=self.profile.extract_max_tokens,
+            max_tokens=int(max_tokens or self.profile.extract_max_tokens),
+            # Gemma-class models spend completion budget on hidden thinking;
+            # structured JSON extract/ingest must disable it or replies truncate.
+            think=False,
         )
         data = _parse_json(result.get("content") or "")
         facts: list[ExtractedFact] = []
         if not data:
             return facts, result
+        # remember(): sole ingest id — remap wrong history-line citations.
+        sole_id = (
+            next(iter(valid_message_ids))
+            if auto_ground and len(valid_message_ids) == 1
+            else None
+        )
         for item in data.get("facts") or []:
             if not isinstance(item, dict):
                 continue
@@ -172,6 +248,12 @@ class MemoryExtractor:
             if not text:
                 continue
             raw_ids = item.get("source_message_ids") or []
+            if isinstance(raw_ids, int):
+                raw_ids = [raw_ids]
+            elif isinstance(raw_ids, str):
+                raw_ids = [raw_ids]
+            elif not isinstance(raw_ids, (list, tuple)):
+                raw_ids = [raw_ids]
             ids = []
             for x in raw_ids:
                 try:
@@ -180,6 +262,8 @@ class MemoryExtractor:
                     continue
                 if i in valid_message_ids:
                     ids.append(i)
+            if not ids and sole_id is not None:
+                ids = [sole_id]
             if not ids:
                 continue  # reject ungrounded facts
             facts.append(ExtractedFact(text=text, source_message_ids=ids))

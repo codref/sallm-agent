@@ -120,7 +120,6 @@ def otlp_http_sink(endpoint, service_name="sallm"):
                                 {
                                     "traceId": event["trace_id"],
                                     "spanId": event["span_id"],
-                                    "parentSpanId": event.get("parent_id") or "",
                                     "name": event.get("name")
                                     or event.get("kind")
                                     or "event",
@@ -136,6 +135,20 @@ def otlp_http_sink(endpoint, service_name="sallm"):
                 }
             ]
         }
+        # Tempo rejects null/empty traceId and empty parentSpanId.
+        if not event.get("trace_id") or not event.get("span_id"):
+            if not warned["done"]:
+                print(
+                    "[sallm trace] otlp emit skipped: missing traceId/spanId",
+                    file=sys.stderr,
+                )
+                warned["done"] = True
+            return
+        parent = event.get("parent_id") or ""
+        if parent:
+            body["resourceSpans"][0]["scopeSpans"][0]["spans"][0][
+                "parentSpanId"
+            ] = parent
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
             endpoint,
@@ -146,6 +159,18 @@ def otlp_http_sink(endpoint, service_name="sallm"):
         try:
             with urllib.request.urlopen(req, timeout=2) as resp:
                 resp.read()
+        except urllib.error.HTTPError as exc:
+            if not warned["done"]:
+                detail = ""
+                try:
+                    detail = (exc.read() or b"")[:200].decode("utf-8", "replace")
+                except Exception:
+                    pass
+                msg = f"{exc}"
+                if detail:
+                    msg = f"{msg} — {detail}"
+                print(f"[sallm trace] otlp emit failed: {msg}", file=sys.stderr)
+                warned["done"] = True
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             if not warned["done"]:
                 print(f"[sallm trace] otlp emit failed: {exc}", file=sys.stderr)
@@ -185,6 +210,11 @@ class Tracer:
         self.turn_span_id = None
         self._turn_start_ns = None
         self._llm_span_id = None
+
+    def _ensure_trace_id(self):
+        """Allocate a root trace when emitting outside ask() (e.g. remember)."""
+        if not self.trace_id:
+            self.trace_id = _trace_id()
 
     def _t(self, text):
         """Truncate a single content field (not a joined multi-message string)."""
@@ -290,6 +320,7 @@ class Tracer:
         metrics = metrics or {}
         content = content or ""
         reasoning = reasoning or ""
+        self._ensure_trace_id()
         end_ns = _now_ns()
         start_ns = end_ns - int((metrics.get("elapsed_ms") or 0) * 1_000_000)
         span_name = name or "chat"
@@ -341,8 +372,11 @@ class Tracer:
     ):
         """JSONL/OTLP marker for Agent.remember (meaning-first ingest)."""
         usage = usage or {}
+        # Standalone root span — not nested under ask().
+        self._ensure_trace_id()
         end_ns = _now_ns()
         start_ns = end_ns - int((usage.get("elapsed_ms") or 0) * 1_000_000)
+        root_id = _span_id()
         attrs = {
             "gen_ai.operation.name": "remember",
             "sallm.remember.source": source or "",
@@ -362,7 +396,7 @@ class Tracer:
             "remember",
             attrs,
             parent_id=None,
-            span_id=_span_id(),
+            span_id=root_id,
             name="remember",
             start_ns=start_ns,
             end_ns=end_ns,

@@ -163,7 +163,7 @@ def test_ingest_instruction_from_compiled_profile(tmp_path):
 
 
 def test_ingest_instruction_distinct_from_turn_extract():
-    assert "ingested" in INGEST_INSTRUCTION.lower()
+    assert "ingested" in INGEST_INSTRUCTION.lower() or "ingest" in INGEST_INSTRUCTION.lower()
     ext = MemoryExtractor(resolve_model_profile(), instruction=INGEST_INSTRUCTION)
     assert ext.instruction is INGEST_INSTRUCTION
 

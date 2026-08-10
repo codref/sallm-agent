@@ -63,7 +63,7 @@ curl -s localhost:9464/metrics | head
 | **Stack, control, tools** | Stack depth over time, control actions (`keep`/`push`/`pop`/`replace`), tool calls + runtime by name, active skill gauge |
 | **Extract / queue lens** | Extract mode, queue depth, extract vs turn latency, miss flushes, drain mix (`lazy`/`miss`), facts vs extract calls |
 | **Remember / ingest** | `Agent.remember()` calls, last tokens/facts, source volume, remember token rate + cumulative, latency, facts vs calls, Tempo `remember` spans |
-| **Traces (Tempo)** | `ask` traces for the session; separate lists for **tool** and **control** spans |
+| **Traces (Tempo)** | `ask` / `remember` / tool / control spans via TempoHTTP. Bound to the **dashboard time range** (`start`/`end`). |
 
 #### Choosing `--extract waterfall` vs `queue`
 
@@ -106,13 +106,27 @@ Ask-span attr: `sallm.extract.miss_flush` (bool) when that turn forced a miss fl
 If Tempo panels are empty but `curl localhost:3200/api/search` shows traces: Grafana 11+
 stubs TraceQL search on `/api/ds/query` (`backend TraceQL search queries are not supported`).
 The provisioned dashboard uses the **TempoHTTP** Infinity datasource against Tempo
-`/api/search` instead. Click a Trace ID to open the waterfall in Explore (stack / goal /
-receipt attrs live on the `ask` span).
+`/api/search` instead. Trace panels pass `start`/`end` from the Grafana time picker
+(`${__from:date:X}` / `${__to:date:X}`). Click a Trace ID to open the waterfall in
+Explore (stack / goal / receipt attrs live on the `ask` span).
+
+Tempo keeps blocks for `block_retention` (**24h** in `docs/tempo.yaml`). Prometheus
+metrics for the same session can outlive those spans — charts may still look full
+while trace tables say **No data**. Recreate Tempo after changing retention, then
+run a fresh `/feed` or ask turn to populate new traces.
 
 After changing provisioned dashboard / datasource / Tempo / compose:
 
 ```bash
 docker compose up -d --force-recreate tempo grafana
+```
+
+If TempoHTTP / Infinity panels show **Could not load plugin … react/jsx-runtime**:
+Grafana must be **≥ 12.3** for Infinity 3.11+. This repo pins `grafana/grafana:12.3.0` and
+`yesoreyeram-infinity-datasource 3.11.2`. Recreate Grafana so the plugin reinstalls:
+
+```bash
+docker compose up -d --force-recreate --pull always grafana
 ```
 
 First Grafana start installs `yesoreyeram-infinity-datasource` (see `GF_INSTALL_PLUGINS`).

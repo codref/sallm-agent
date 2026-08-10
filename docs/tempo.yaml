@@ -23,7 +23,9 @@ ingester:
 
 compactor:
   compaction:
-    block_retention: 1h
+    # Keep traces long enough for "Last 6 hours" / overnight dashboard windows.
+    # (Prometheus scrapes metrics independently and retains them longer.)
+    block_retention: 24h
 
 storage:
   trace:

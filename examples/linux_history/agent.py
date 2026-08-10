@@ -260,10 +260,23 @@ def drain_pending_remember(agent: Agent) -> list[dict]:
         f"[dim]remember[/] ingesting {len(items)} history block(s) (LLM meaning)…"
     )
     results = agent.remember_many(items)
+    empty = 0
     for r in results:
         n = r.get("facts") or 0
         src = r.get("source") or ""
         console.print(f"[dim]remember[/] {src}: facts={n}")
+        if n == 0:
+            empty += 1
+    if empty and empty == len(results):
+        console.print(
+            "[yellow]remember[/] all blocks returned 0 facts — "
+            "restart the agent after pull if you have not; "
+            "ingest now uses think=False + higher max_tokens"
+        )
+    elif empty:
+        console.print(
+            f"[dim]remember[/] {empty}/{len(results)} block(s) produced no facts"
+        )
     return results
 
 
@@ -300,14 +313,21 @@ def print_memory(agent: Agent) -> None:
     chunks = agent.repo.list_chunks(agent.session_id)
     derived = agent.repo.list_derived(agent.session_id)
     indexed = sum(1 for c in chunks if c.indexed)
-    console.print(
-        Panel(
-            f"chunks: [cyan]{len(chunks)}[/] (indexed={indexed})\n"
-            f"derived facts: [cyan]{len(derived)}[/]",
-            title="memory",
-            border_style="cyan",
-        )
-    )
+    lines = [
+        f"chunks: [cyan]{len(chunks)}[/] (indexed={indexed})",
+        f"derived facts: [cyan]{len(derived)}[/]",
+    ]
+    if derived:
+        lines.append("")
+        # Newest last in store; show the tail.
+        sample = derived[-20:]
+        lines.append(f"latest {len(sample)} fact(s):")
+        for text, src_ids in sample:
+            preview = text.replace("\n", " ")
+            if len(preview) > 120:
+                preview = preview[:117] + "..."
+            lines.append(f"  · {preview}  [dim](src={src_ids})[/]")
+    console.print(Panel("\n".join(lines), title="memory", border_style="cyan"))
 
 
 def print_stack(agent: Agent) -> None:

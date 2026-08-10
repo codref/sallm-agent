@@ -57,6 +57,32 @@ def test_controller_valid_json():
     assert decision.retrieval_query == "what is the code"
 
 
+def test_extractor_accepts_scalar_source_id():
+    ext = MemoryExtractor(resolve_model_profile())
+    body = '{"facts":[{"text":"host 10.0.0.1","source_message_ids":1}]}'
+    with patch("sallm.control.complete", return_value=_llm(body)):
+        facts, _ = ext.extract(
+            transcript_snippet="[1] ingest: ssh 10.0.0.1",
+            valid_message_ids={1},
+            auto_ground=True,
+        )
+    assert len(facts) == 1
+    assert facts[0].source_message_ids == [1]
+
+
+def test_parse_json_fenced_and_truncated():
+    from sallm.control import _parse_json
+
+    fenced = '```json\n{"facts":[{"text":"a","source_message_ids":[1]}]}\n```'
+    assert _parse_json(fenced)["facts"][0]["text"] == "a"
+
+    truncated = '{"facts":[{"text":"ssh to 10.0.0.1","source_message_ids":[1]},{"text":"half'
+    parsed = _parse_json(truncated)
+    assert parsed is not None
+    assert len(parsed.get("facts") or []) >= 1
+    assert "ssh" in parsed["facts"][0]["text"]
+
+
 def test_extractor_rejects_ungrounded():
     ext = MemoryExtractor(resolve_model_profile())
     body = '{"facts":[{"text":"x","source_message_ids":[99]}]}'
@@ -78,6 +104,23 @@ def test_extractor_keeps_grounded():
         )
     assert len(facts) == 1
     assert facts[0].text == "code is 42"
+
+
+def test_extractor_autogrounds_single_valid_id():
+    """Remember windows: model cites history line nums → remap to ingest id."""
+    ext = MemoryExtractor(resolve_model_profile())
+    body = (
+        '{"facts":[{"text":"ssh to 203.0.113.10",'
+        '"source_message_ids":[12567]}]}'
+    )
+    with patch("sallm.control.complete", return_value=_llm(body)):
+        facts, _ = ext.extract(
+            transcript_snippet="[9] ingest: ssh deploy@203.0.113.10",
+            valid_message_ids={9},
+            auto_ground=True,
+        )
+    assert len(facts) == 1
+    assert facts[0].source_message_ids == [9]
 
 
 def test_skill_registry_tool_subset():

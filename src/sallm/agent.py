@@ -289,7 +289,11 @@ class Agent:
 
         # Cap what we send to the interpreter (cost / quality).
         snippet_body = body if len(body) <= 8000 else body[:8000] + "\n… [truncated]"
-        snippet = f"[{stored.id}] ingest: {snippet_body}"
+        snippet = (
+            f"Ingest message id: {stored.id}\n"
+            f"[{stored.id}] ingest:\n{snippet_body}\n"
+            f"(Cite source_message_ids: [{stored.id}] only.)"
+        )
         demos = ""
         if self.compiled_profile:
             demos = str(
@@ -298,10 +302,15 @@ class Agent:
                 or self.compiled_profile.demonstrations.get("extractor")
                 or ""
             )
+        # Ingest blocks are denser than turn extracts — allow a longer JSON reply.
+        # Prefer headroom even with think disabled (dense 30-line blocks).
+        ingest_max = max(int(self.profile.extract_max_tokens), 2048)
         facts, ext_result = self.ingest_interpreter.extract(
             transcript_snippet=snippet,
             valid_message_ids={stored.id},
             demos=demos,
+            max_tokens=ingest_max,
+            auto_ground=True,
         )
         usage = metrics_mod.from_llm_result(ext_result)
         if self.trace is not None:
