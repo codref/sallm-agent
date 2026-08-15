@@ -25,6 +25,7 @@ Core deps include `peewee` (SQLite ORM) and `lancedb` (vector index). There is *
 
 - [`examples/imap_inbox/`](examples/imap_inbox/) — durable IMAP inbox Q&A (CLI tools + long-session recall). See the docstring in `agent.py`.
 - [`examples/linux_history/`](examples/linux_history/) — durable bash/zsh history Q&A + live `bash_run` (usage-story inference). See the docstring in `agent.py`.
+- [`examples/small_chat/`](examples/small_chat/) — inject a CompiledProfile at runtime; model comes from the profile’s `target_model` (`--profile path.json`). Example profiles: `profile.json`, `profile-cpu.json`, `profile-gemma.json` (not under `src/sallm/profiles/`).
 
 ## Turn pipeline
 
@@ -81,7 +82,12 @@ Default skill is `converse`. Register more with `SkillRegistry` (name, descripti
 Neutral JSON under `sallm/profiles/` (instructions + demos + budgets). Offline:
 
 ```bash
-uv run sallm optimize --dataset data/cases.jsonl --task controller --out /tmp/profile.json
+uv run sallm optimize \
+  --dataset examples/small_chat/opt_cases.jsonl \
+  --profile examples/small_chat/profile.json \
+  --task converse \
+  --teacher ollama_chat/gemma4:e4b-it-qat \
+  --out examples/small_chat/profile.opt.json
 ```
 
 `sallm chat` never optimizes at startup; it only loads a profile.

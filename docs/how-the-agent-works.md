@@ -308,7 +308,7 @@ Use it to validate:
 
 **Counter-hypothesis (keep honest):** if retrieval misses (bad query, embedding drift, empty index), the model still fails like a truncated agent. The receipt shows empty `retrieved`—that is the debugging signal. A single **oversized** user turn (e.g. a full meeting dump in `--script`) is omitted from history as soon as any newer Q/A exists; see [Oversized briefings](oversized-briefings.md).
 
-Offline prompt search (`sallm optimize`) can improve controller/extractor/converse instructions against JSONL cases; chat never optimizes at startup. It loads a neutral profile JSON when present.
+Offline prompt search (`sallm optimize`) compiles converse into the same `Prompt.system()` chat uses and scores parsed ```run / tool observations; JSON tasks stay instruction+Input. Chat never optimizes at startup. It loads a neutral profile JSON when present.
 
 ---
 

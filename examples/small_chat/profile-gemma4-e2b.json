@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "target_model": "ollama/gemma4:e2b-it-qat",
+  "instructions": {
+    "controller": "Reply with ONE JSON object only (no markdown fences):\n{\"goal\":\"...\",\"action\":\"keep\",\"skill\":\"converse\",\"retrieval_query\":\"...\"}\n\nretrieval_query rules:\nA) Use \"\" (empty) when the user is: greeting; doing only calc/math; doing only echo; storing a NEW fact (\"please remember that...\"); or asking an opinion/filler trivia.\nB) Use a short NON-EMPTY search phrase when the user wants OLD facts: recall, remind, list facts from earlier, summarize remembered facts, \"what was my \u2026\", \"without guessing\", and mixed turns that also use calc/echo first.\nB phrases: \"lab code\", \"meeting password\", \"desk room\", \"durable facts\", \"remembered facts\".\nNever put tool names (calc, echo) into retrieval_query.\nAlways action=keep and skill=converse.",
+    "extractor": "Extract facts stated by the USER from the provided messages. \n\nRules:\n- Include all user-provided information (e.g., locations, Wi-Fi names, identifiers) even if the assistant refused to process it or provided a calculation result.\n- Copy codes and alphanumeric identifiers verbatim (e.g., \"ORANGE-19\", \"maple-dusk-7\").\n- Do NOT extract any information about the assistant's identity, policies, or background (e.g., do not include \"I am a large language model\").\n- Only include facts supported by the listed source message IDs.\n- If no user facts are found, return {\"facts\":[]}.\n\nReply with ONE JSON object only:\n{\"facts\":[{\"text\":\"...\",\"source_message_ids\":[ID]}]}",
+    "ingest": "",
+    "converse": "If the user asks for calc or echo, your entire first reply must be exactly one ```run block containing one command; do not use pipes or combine commands. Use `calc -e 'EXPR'` (use ** for powers, e.g. 2**8) and `echo --text WORD`.\nExample:\n```run\ncalc -e '2**8'\n```\nAfter Tool results: reply in plain text with the tool value AND any recall/remind the user asked for, copying codes from [Retrieved memory] verbatim (e.g. ORANGE-19). Do not stop at only \"The result is N\". Do not emit a second ```run.\nFor remember/greet/recall-only: no tools. Remember = one NEW sentence that copies the fact verbatim including hyphens (maple-dusk-7, ORANGE-19) \u2014 never start with \"The result is\". Recall/list = copy every requested fact from [Retrieved memory] verbatim (include passwords). Never refuse. Do not repeat your previous message or include intros/bios.",
+    "rewriter": ""
+  },
+  "demonstrations": {
+    "controller": "User: What is 17 times 19? Use the calc tool.\n{\"goal\":\"compute 17*19\",\"action\":\"keep\",\"skill\":\"converse\",\"retrieval_query\":\"\"}\n\nUser: Please remember that the meeting password for Friday is maple-dusk-7.\n{\"goal\":\"store meeting password\",\"action\":\"keep\",\"skill\":\"converse\",\"retrieval_query\":\"\"}\n\nUser: What is a calm color for a reading lamp?\n{\"goal\":\"suggest lamp color\",\"action\":\"keep\",\"skill\":\"converse\",\"retrieval_query\":\"\"}\n\nUser: Without guessing: list the three durable facts from earlier in short bullets.\n{\"goal\":\"list durable facts\",\"action\":\"keep\",\"skill\":\"converse\",\"retrieval_query\":\"durable facts\"}\n\nUser: Summarize in one sentence the three facts I just asked you to remember.\n{\"goal\":\"summarize remembered facts\",\"action\":\"keep\",\"skill\":\"converse\",\"retrieval_query\":\"remembered facts\"}\n\nUser: After that calculation, remind me of the lab code ORANGE-19 again in one short sentence.\n{\"goal\":\"remind lab code\",\"action\":\"keep\",\"skill\":\"converse\",\"retrieval_query\":\"lab code\"}\n\nUser: What is 3 times 7? Use calc. Then remind me of my lab code.\n{\"goal\":\"calc then recall lab code\",\"action\":\"keep\",\"skill\":\"converse\",\"retrieval_query\":\"lab code\"}",
+    "extractor": "",
+    "ingest": "",
+    "converse": "User: Please remember that the meeting password for Friday is maple-dusk-7.\nAssistant: Saved meeting password maple-dusk-7.\n\nUser: What is the Friday meeting password we saved?\n[Retrieved memory] Friday meeting password is maple-dusk-7.\nAssistant: maple-dusk-7\n\nUser: Without guessing: list the three durable facts from earlier in short bullets.\n[Retrieved memory] lab code ORANGE-19; desk B-12 wifi lab-guest; password maple-dusk-7.\nAssistant:\n- ORANGE-19\n- B-12 / lab-guest\n- maple-dusk-7\n\nUser: What is 3 times 7? Use calc. Then remind me of my lab code.\nAssistant:\n```run\ncalc -e '3*7'\n```\nUser: Tool results:\n$ calc -e '3*7'\n21\nAssistant: The result is 21. Your lab code is ORANGE-19.\n\nUser: Echo the word BANANA, then tell me my meeting password.\nAssistant:\n```run\necho --text BANANA\n```\nUser: Tool results:\n$ echo --text BANANA\nBANANA\nAssistant: BANANA. Your meeting password is maple-dusk-7.",
+    "rewriter": ""
+  },
+  "budgets": {
+    "prompt_budget": 2048,
+    "max_output_tokens": 512,
+    "recent_history_tokens": 900,
+    "retrieval_tokens": 400,
+    "control_max_tokens": 128,
+    "extract_max_tokens": 192,
+    "think": false,
+    "temperature": 0
+  },
+  "metadata": {
+    "dataset_fingerprint": "78a08cb9b62dbbc9",
+    "seed": 0,
+    "note": "Mixed tool+recall: rewrite-aware controller, post-tool recall in converse, tight budgets.",
+    "metrics": {
+      "best": {
+        "quality": 1.0,
+        "mandatory_misses": 0,
+        "note": "controller evaluate quality=1.0; converse mandatory_misses=0"
+      }
+    },
+    "optimize_task": "converse",
+    "created_at": 1786742099.3832726,
+    "content_digest": "eabd8eabfa2653db4dae98c57588aa4a4f844d685e68768b4028e6fe4b5f47b3"
+  }
+}

@@ -3,6 +3,8 @@ def empty_usage():
         "prompt_tokens": 0,
         "completion_tokens": 0,
         "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "reasoning_chars": 0,
         "elapsed_ms": 0.0,
     }
 
@@ -13,16 +15,26 @@ def add_usage(a, b):
         "completion_tokens": a.get("completion_tokens", 0)
         + b.get("completion_tokens", 0),
         "total_tokens": a.get("total_tokens", 0) + b.get("total_tokens", 0),
+        "reasoning_tokens": a.get("reasoning_tokens", 0)
+        + b.get("reasoning_tokens", 0),
+        "reasoning_chars": a.get("reasoning_chars", 0) + b.get("reasoning_chars", 0),
         "elapsed_ms": a.get("elapsed_ms", 0.0) + b.get("elapsed_ms", 0.0),
     }
 
 
 def from_llm_result(result):
     usage = result.get("usage") or {}
+    reasoning = result.get("reasoning") or ""
+    chars = len(reasoning) if isinstance(reasoning, str) else 0
+    rtok = usage.get("reasoning_tokens")
+    if rtok is None:
+        rtok = chars // 4
     return {
         "prompt_tokens": usage.get("prompt_tokens", 0),
         "completion_tokens": usage.get("completion_tokens", 0),
         "total_tokens": usage.get("total_tokens", 0),
+        "reasoning_tokens": int(rtok or 0),
+        "reasoning_chars": chars,
         "elapsed_ms": result.get("elapsed_ms", 0.0),
     }
 
@@ -40,6 +52,8 @@ def summarize(metrics, context_messages=0, prompt_messages=None):
         "prompt_tokens": metrics.get("prompt_tokens", 0),
         "completion_tokens": metrics.get("completion_tokens", 0),
         "total_tokens": metrics.get("total_tokens", 0),
+        "reasoning_tokens": metrics.get("reasoning_tokens", 0),
+        "reasoning_chars": metrics.get("reasoning_chars", 0),
         "elapsed_ms": round(metrics.get("elapsed_ms", 0.0), 1),
         "context_messages": context_messages,
         "prompt_messages": prompt_messages,

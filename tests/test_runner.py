@@ -38,6 +38,11 @@ def test_parse_run_blocks_empty():
     assert parse_run_blocks("```run\n\n```") == []
 
 
+def test_parse_run_blocks_same_line():
+    cmds = parse_run_blocks("```run calc -e '2**8' ```")
+    assert cmds == [["calc", "-e", "2**8"]]
+
+
 def test_parse_run_line_apostrophe_does_not_collapse_command():
     """Tom's breaks shlex; must not become unknown tool '<whole line>'."""
     text = """```run

@@ -40,9 +40,12 @@ class TurnRunner:
         self.agent = agent
 
     def _complete(self, messages, turn_metrics, *, max_tokens=None):
-        kwargs = {}
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
+        cap = (
+            max_tokens
+            if max_tokens is not None
+            else self.agent.profile.max_output_tokens
+        )
+        kwargs = self.agent.profile.complete_kwargs(max_tokens=cap)
         self.agent.last_prompt = list(messages)
         result = complete(
             model=self.agent.model,
@@ -86,9 +89,13 @@ class TurnRunner:
 
     def _record_action(self, content, result, step_metrics, results):
         observation = format_observations(results)
+        pending = any(r.intermediate for r in results)
+        follow = observation
+        if self.agent.multi_step and not pending:
+            follow = observation + "\n" + self.agent.prompt.REMAINING_NUDGE
         self.agent.messages.append(assistant(content))
         self.agent.messages.append(
-            user(self.agent.prompt.RESULTS_PREFIX + observation)
+            user(self.agent.prompt.RESULTS_PREFIX + follow)
         )
         # Persist to SQLite when a repository is present.
         repo = self.agent.repo
@@ -99,10 +106,9 @@ class TurnRunner:
             repo.append_message(
                 self.agent.session_id,
                 role="user",
-                content=self.agent.prompt.RESULTS_PREFIX + observation,
+                content=self.agent.prompt.RESULTS_PREFIX + follow,
                 kind="tool",
             )
-        pending = any(r.intermediate for r in results)
         return {
             "kind": "action",
             "raw": content,

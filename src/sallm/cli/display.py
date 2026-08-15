@@ -234,6 +234,8 @@ def print_metrics(metrics):
     table.add_column()
     table.add_row("in tokens", str(metrics.get("prompt_tokens", 0)))
     table.add_row("out tokens", str(metrics.get("completion_tokens", 0)))
+    table.add_row("think tokens", str(metrics.get("reasoning_tokens", 0)))
+    table.add_row("think chars", str(metrics.get("reasoning_chars", 0)))
     table.add_row("total tokens", str(metrics.get("total_tokens", 0)))
     table.add_row("elapsed", f"{metrics.get('elapsed_ms', 0):.1f} ms")
     table.add_row("context msgs", str(metrics.get("context_messages", 0)))

@@ -10,6 +10,7 @@ from .memory import (
     VectorStore,
 )
 from .messages import DEFAULT_API_BASE, DEFAULT_MODEL
+from .llm import ThinkingTruncated
 from .models import EmbeddingProfile, ModelProfile
 from .prompt import CompiledProfile, Prompt
 from .receipt import ContextReceipt
@@ -28,6 +29,7 @@ __all__ = [
     "RetrievalConfig",
     "Skill",
     "SkillRegistry",
+    "ThinkingTruncated",
     "ToolResult",
     "VectorHit",
     "VectorQuery",

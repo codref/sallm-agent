@@ -1,0 +1,66 @@
+# Small-chat QA script — runtime profile demo
+# ------------------------------------------
+# One non-empty, non-# line = one agent.ask turn.
+#
+# Phases: greet → tools → anchor facts → filler (evict recent history) → recall.
+# Budgets in the profile use ~900 recent-history tokens, so filler matters.
+#
+#   ollama pull qwen3.5:0.8b   # or whatever target_model is in --profile
+#   ollama pull qwen3-embedding:0.6b
+#   ollama create qwen3.5:0.8b-cpu -f examples/small_chat/Modelfile   # optional
+#   uv run python examples/small_chat/agent.py --script examples/small_chat/qa_script.txt
+#   uv run python examples/small_chat/agent.py \
+#     --profile examples/small_chat/profile-cpu.json \
+#     --script examples/small_chat/qa_script.txt
+#
+# Resume later with the same session:
+#   uv run python examples/small_chat/agent.py --session small-chat-demo
+
+# === Phase 1: Greet (plain converse, no tools) ===
+Hi — introduce yourself in one short sentence.
+In one sentence, what are you good at helping with?
+
+# === Phase 2: Tools (calc / echo) ===
+What is 2 to the power of 8? Use the calc tool.
+What is 17 times 19? Use the calc tool.
+Echo the word PINEAPPLE with the echo tool, then tell me what you got back.
+
+# === Phase 3: Anchor durable facts ===
+Please remember that my lab code is ORANGE-19.
+Please remember that my desk is in room B-12 and the wifi network is lab-guest.
+Please remember that the meeting password for Friday is maple-dusk-7.
+Summarize in one sentence the three facts I just asked you to remember.
+
+# === Phase 4: Filler (push anchors out of the recent-history window) ===
+In one short sentence, what is a hash table good for?
+Name three primary colors.
+What is the capital of France? Answer in one word.
+Give me a two-word synonym for "happy".
+Is 91 a prime number? Yes or no only.
+What ocean is between Europe and America? One word.
+Name a mammal that lays eggs.
+What is 7 + 5? Just the number.
+Spell "queue" aloud as letters only.
+What day comes after Tuesday? One word.
+Give a one-word antonym of "hot".
+What gas do plants absorb? Chemical formula only.
+Name one planet closer to the Sun than Earth.
+What is H2O commonly called? One word.
+Is the Earth flat? Yes or no only.
+
+# === Phase 5: Recall (needs retrieval / controller, not recent history) ===
+What lab code did I tell you earlier?
+Which room is my desk in?
+What was the Friday meeting password?
+List the three facts I asked you to remember: lab code, desk room, meeting password.
+Remind me of the wifi network name I mentioned with my desk.
+After that calc about 2**8, what lab code did I ask you to remember?
+
+# === Phase 6: Mixed (tool + memory) ===
+What is 3 times 7? Use calc. Then remind me of my lab code.
+Echo the word BANANA, then tell me my meeting password.
+
+# === done ===
+/memory
+/context
+/quit

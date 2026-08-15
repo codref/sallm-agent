@@ -271,7 +271,7 @@ Shipped builtins: `echo`, `calc`, `dig` via `builtin_tools(...)`.
 
 CLI-equivalent labels: `raw` \| `instruct` \| `rewrite` \| `hyde` \| `rewrite+hyde`.
 
-Token budgets live on `ModelProfile` (Gemma defaults):
+Token budgets live on `ModelProfile` (Gemma defaults) and are overlaid from compiled profile `budgets` when that JSON is loaded:
 
 | Budget | Default | Role |
 |--------|---------|------|
@@ -298,7 +298,7 @@ SQLite keeps chunk text + `indexed` flags; Lance can be rebuilt after a crash.
 Neutral JSON profiles live under `sallm/profiles/`. Chat/runtime **loads** a profile; it does **not** optimize at startup.
 
 ```bash
-uv run sallm optimize --dataset data/cases.jsonl --task controller --out /tmp/profile.json
+uv run sallm optimize --dataset data/cases.jsonl --profile path/to/profile.json --task converse --teacher ollama_chat/gemma4:e4b-it-qat --out path/to/profile.opt.json
 ```
 
 Load via `compiled_profile=CompiledProfile(...)` only when the project already has a compiled artifact. Do not run optimize in request paths.

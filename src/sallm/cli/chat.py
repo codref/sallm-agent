@@ -14,11 +14,11 @@ from sallm import Agent
 from sallm.cli import display
 from sallm.cli.optimize_cmd import register as register_optimize
 from sallm.context import MaxMessages, SummarizeOverflow
-from sallm.llm import complete
+from sallm.llm import ThinkingTruncated, complete
 from sallm.messages import DEFAULT_API_BASE, DEFAULT_MODEL
 from sallm.models import resolve_embedding_profile
 from sallm.prom import SessionMetrics
-from sallm.prompt import CompiledProfile
+from sallm.prompt import DEFAULT_PROFILE_PATH, CompiledProfile
 from sallm.tools import DEFAULT_TOOLS, builtin_tools, reset_dig_state
 from sallm.trace import DEFAULT_TRUNCATE, Tracer, jsonl_sink, multi_sink, otlp_http_sink
 
@@ -35,9 +35,6 @@ CONTEXT_NONE = "none"
 CONTEXT_MAX_MESSAGES = "max-messages"
 CONTEXT_SUMMARIZE = "summarize"
 CONTEXT_CHOICES = (CONTEXT_NONE, CONTEXT_MAX_MESSAGES, CONTEXT_SUMMARIZE)
-_DEFAULT_PROFILE = (
-    Path(__file__).resolve().parents[1] / "profiles" / "gemma4-e4b-v1.json"
-)
 
 
 @app.callback()
@@ -229,7 +226,7 @@ def chat(
     )
 
     compiled = None
-    ppath = Path(profile_path) if profile_path else _DEFAULT_PROFILE
+    ppath = Path(profile_path) if profile_path else DEFAULT_PROFILE_PATH
     if ppath.is_file():
         try:
             compiled = CompiledProfile.load(ppath)
@@ -334,6 +331,9 @@ def chat(
         with console.status("[dim]thinking…[/]", spinner="dots"):
             try:
                 result = agent.ask(line)
+            except ThinkingTruncated as exc:
+                console.print(f"[yellow]thinking truncated:[/] {exc}")
+                continue
             except Exception as exc:
                 console.print(f"[red]error:[/] {exc}")
                 continue

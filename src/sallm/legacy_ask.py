@@ -41,11 +41,19 @@ def ask_legacy(agent, user_text: str):
             out["stopped"] = stopped
         return out
 
+    def _react_kwargs():
+        return agent.profile.complete_kwargs(
+            max_tokens=agent.profile.max_output_tokens
+        )
+
     for _ in range(agent.max_steps):
         prompt = agent._prompt_messages(agent.messages)
         agent.last_prompt = prompt
         result = complete(
-            model=agent.model, messages=prompt, api_base=agent.api_base
+            model=agent.model,
+            messages=prompt,
+            api_base=agent.api_base,
+            **_react_kwargs(),
         )
         step_metrics = metrics_mod.from_llm_result(result)
         turn_metrics = metrics_mod.add_usage(turn_metrics, step_metrics)
@@ -77,9 +85,12 @@ def ask_legacy(agent, user_text: str):
                         elapsed_ms=per,
                     )
             observation = format_observations(results)
-            agent.messages.append(assistant(content))
-            agent.messages.append(user(agent.prompt.RESULTS_PREFIX + observation))
             pending = any(r.intermediate for r in results)
+            follow = observation
+            if agent.multi_step and not pending:
+                follow = observation + "\n" + agent.prompt.REMAINING_NUDGE
+            agent.messages.append(assistant(content))
+            agent.messages.append(user(agent.prompt.RESULTS_PREFIX + follow))
             steps.append(
                 {
                     "kind": "action",
@@ -143,7 +154,10 @@ def ask_legacy(agent, user_text: str):
         prompt = agent._prompt_messages(agent.messages)
         agent.last_prompt = prompt
         result = complete(
-            model=agent.model, messages=prompt, api_base=agent.api_base
+            model=agent.model,
+            messages=prompt,
+            api_base=agent.api_base,
+            **_react_kwargs(),
         )
         step_metrics = metrics_mod.from_llm_result(result)
         turn_metrics = metrics_mod.add_usage(turn_metrics, step_metrics)

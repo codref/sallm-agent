@@ -170,8 +170,9 @@ class Controller:
             model=self.profile.model,
             messages=[user(prompt)],
             api_base=self.profile.api_base,
-            max_tokens=self.profile.control_max_tokens,
-            think=False,
+            **self.profile.complete_kwargs(
+                max_tokens=self.profile.control_max_tokens, json_mode=True
+            ),
         )
         data = _parse_json(result.get("content") or "")
         allowed = {"keep", "push", "pop", "replace"}
@@ -226,10 +227,10 @@ class MemoryExtractor:
             model=self.profile.model,
             messages=[user(prompt)],
             api_base=self.profile.api_base,
-            max_tokens=int(max_tokens or self.profile.extract_max_tokens),
-            # Gemma-class models spend completion budget on hidden thinking;
-            # structured JSON extract/ingest must disable it or replies truncate.
-            think=False,
+            **self.profile.complete_kwargs(
+                max_tokens=int(max_tokens or self.profile.extract_max_tokens),
+                json_mode=True,
+            ),
         )
         data = _parse_json(result.get("content") or "")
         facts: list[ExtractedFact] = []

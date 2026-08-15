@@ -94,6 +94,8 @@ class Agent:
         self.embedding_profile = embedding_profile or resolve_embedding_profile()
         self.skills = skills or SkillRegistry()
         self.compiled_profile = compiled_profile
+        if compiled_profile is not None:
+            self.profile = compiled_profile.apply_budgets(self.profile)
         self.extract_mode = normalize_extract_mode(extract_mode)
 
         if retrieval is not None:
@@ -197,6 +199,8 @@ class Agent:
             skill_prompt=skill_prompt,
             goal=goal,
             compiled=self.compiled_profile,
+            think=self.profile.think,
+            think_hint=self.profile.think_hint,
         )
 
     def _ensure_system(self):

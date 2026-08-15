@@ -6,6 +6,28 @@ from dataclasses import dataclass, replace
 
 from .messages import DEFAULT_API_BASE, DEFAULT_MODEL
 
+# Ollama /api/chat ``think`` values besides true/false.
+THINK_LEVELS = ("low", "medium", "high", "max")
+
+
+def coerce_think(value) -> bool | str | None:
+    """Normalize profile JSON / kwargs to False, True, or a level string."""
+    if value is None or isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("", "false", "off", "none", "0"):
+        return False
+    if text in ("true", "on", "1"):
+        return True
+    if text in THINK_LEVELS:
+        return text
+    raise ValueError(f"think must be bool or {THINK_LEVELS}, got {value!r}")
+
+
+def think_on(value) -> bool:
+    """True when the provider should emit a separate thinking trace."""
+    return coerce_think(value) not in (None, False)
+
 
 @dataclass(frozen=True)
 class EmbeddingProfile:
@@ -41,7 +63,26 @@ class ModelProfile:
     # Soft caps for optional compiled instructions / demos.
     instruction_tokens: int = 400
     demo_tokens: int = 400
+    # Thinking and the visible reply share max_output_tokens (Ollama has no
+    # separate think cap). False disables; True enables; "low"/"medium"/
+    # "high"/"max" set effort on models that honor levels (gpt-oss, etc.).
+    think: bool | str | None = None
+    # Optional extra system text, injected only when thinking is on.
+    think_hint: str | None = None
+    # Sampling; omit (None) so the provider default is used.
+    temperature: float | None = None
     version: str = "gemma4-e4b-v1"
+
+    def complete_kwargs(self, *, max_tokens: int, json_mode: bool = False) -> dict:
+        """Kwargs for ``sallm.llm.complete`` besides model/messages/api_base."""
+        kw: dict = {"max_tokens": int(max_tokens)}
+        if json_mode:
+            kw["think"] = False
+        elif self.think is not None:
+            kw["think"] = self.think
+        if self.temperature is not None:
+            kw["temperature"] = float(self.temperature)
+        return kw
 
 
 # Built-in profiles keyed by LiteLLM model id (and short aliases).

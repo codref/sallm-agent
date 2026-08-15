@@ -1,0 +1,7 @@
+FROM qwen3.5:0.8b
+# Force 0 GPU layers (CPU only).
+# Create with:
+#   ollama create qwen3.5:0.8b-cpu -f examples/small_chat/Modelfile
+# Then point a profile's target_model at it, e.g. profile-cpu.json:
+#   uv run python examples/small_chat/agent.py --profile examples/small_chat/profile-cpu.json
+PARAMETER num_gpu 0

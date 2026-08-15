@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import fields, replace
 from pathlib import Path
+
+from sallm.models import ModelProfile, coerce_think, think_on
 
 SYSTEM = """You are a helpful assistant.
 
@@ -31,8 +34,9 @@ Available tools:
 
 MULTI_STEP_ON = """Multi-step mode is ON.
 If the user asked for several sequential operations, run one tool (or one batch) at a time.
-After each tool result, either emit another ```run block or answer in plain text when finished.
-If a tool result starts with [intermediate], the work is not done — run that tool again.
+After each tool result, finish the rest of that user request in the same reply
+(report the observation, then any recall/plain-text parts). Do not stop at only
+the tool result. If a tool result starts with [intermediate], run that tool again.
 Do not invent tool output."""
 
 MULTI_STEP_OFF = """Multi-step mode is OFF.
@@ -54,6 +58,16 @@ EARLY_ANSWER_NUDGE = (
 )
 
 RESULTS_PREFIX = "Tool results:\n"
+REMAINING_NUDGE = (
+    "If the user's last request has anything left besides this tool "
+    "(recall, remind, a second fact), do that now using [Retrieved memory] "
+    "when present. Otherwise one short sentence with the result."
+)
+
+# Packaged empty baseline (same default as `sallm chat` / `sallm optimize`).
+DEFAULT_PROFILE_PATH = (
+    Path(__file__).resolve().parent / "profiles" / "gemma4-e4b-v1.json"
+)
 
 
 class CompiledProfile:
@@ -84,6 +98,32 @@ class CompiledProfile:
             metadata=dict(data.get("metadata") or {}),
         )
 
+    def apply_budgets(self, profile: ModelProfile) -> ModelProfile:
+        """Overlay JSON ``budgets`` onto a ModelProfile. Unknown keys ignored."""
+        allowed = {f.name for f in fields(ModelProfile)} - {
+            "model",
+            "api_base",
+            "version",
+        }
+        updates = {}
+        for key, value in (self.budgets or {}).items():
+            if key not in allowed or value is None:
+                continue
+            if key == "think":
+                updates[key] = coerce_think(value)
+            elif key == "think_hint":
+                text = str(value).strip()
+                updates[key] = text or None
+            elif key == "temperature":
+                updates[key] = float(value)
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                updates[key] = int(value)
+            else:
+                updates[key] = value
+        if not updates:
+            return profile
+        return replace(profile, **updates)
+
 
 class Prompt:
     """Visible agent prompt templates — build system text and named nudges."""
@@ -94,6 +134,7 @@ class Prompt:
     CONTINUE_NUDGE = CONTINUE_NUDGE
     EARLY_ANSWER_NUDGE = EARLY_ANSWER_NUDGE
     RESULTS_PREFIX = RESULTS_PREFIX
+    REMAINING_NUDGE = REMAINING_NUDGE
 
     def __init__(
         self,
@@ -104,6 +145,8 @@ class Prompt:
         skill_prompt: str = "",
         goal: str = "",
         compiled: CompiledProfile | None = None,
+        think=None,
+        think_hint: str | None = None,
     ):
         self.tools_text = tools_text or "(none)"
         self.multi_step = multi_step
@@ -111,6 +154,8 @@ class Prompt:
         self.skill_prompt = (skill_prompt or "").strip()
         self.goal = (goal or "").strip()
         self.compiled = compiled
+        self.think = think
+        self.think_hint = (think_hint or "").strip() or None
 
     def policy(self) -> str:
         return self.MULTI_STEP_ON if self.multi_step else self.MULTI_STEP_OFF
@@ -119,6 +164,15 @@ class Prompt:
         converse_extra = ""
         if self.compiled and self.compiled.instructions.get("converse"):
             converse_extra = str(self.compiled.instructions["converse"]).strip()
+        converse_demos = ""
+        if self.compiled:
+            converse_demos = str(
+                self.compiled.demonstrations.get("converse") or ""
+            ).strip()
+        if converse_extra and converse_demos:
+            converse_extra = f"{converse_extra}\nExamples:\n{converse_demos}"
+        elif converse_demos and not converse_extra:
+            converse_extra = f"Examples:\n{converse_demos}"
         base = self.SYSTEM.format(
             tools=self.tools_text,
             multi_step_policy=self.policy(),
@@ -126,13 +180,19 @@ class Prompt:
         parts = []
         if self.extra:
             parts.append(self.extra.rstrip())
-        if converse_extra:
-            parts.append(converse_extra)
         if self.skill_prompt:
             parts.append(self.skill_prompt)
         if self.goal:
             parts.append(f"Current goal: {self.goal}")
         parts.append(base)
+        # Converse last so the compiled instruction is what the student sees
+        # after the generic "skip tools if you already know" SYSTEM block.
+        if converse_extra:
+            parts.append(converse_extra)
+        # Only when thinking is on — models that need a short "keep the
+        # trace off the answer" nudge put it in budgets.think_hint.
+        if think_on(self.think) and self.think_hint:
+            parts.append(self.think_hint)
         return "\n\n".join(parts)
 
     def as_dict(self) -> dict:

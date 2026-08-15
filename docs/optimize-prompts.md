@@ -2,12 +2,12 @@
 
 This guide covers two related knobs:
 
-1. **Prompt profiles** — instructions (and optional demos) for controller, extractor, ingest (`Agent.remember`), converse, and rewriter, searched offline and saved as neutral JSON.
-2. **Runtime parameters** — token budgets, retrieval mode, top‑k, chunk size, and related CLI flags you tune by hand (or later bake into profile `budgets`).
+1. **Prompt profiles** — instructions (and optional demos) plus **budgets** (`think`, temperature, token caps) in one JSON file.
+2. **Retrieval parameters** — mode, top‑k, chunk size (CLI / `EmbeddingProfile`).
 
-`sallm chat` never optimizes at startup. It only **loads** a profile. Search runs via `sallm optimize`.
+`sallm chat` never optimizes at startup. It only **loads** a profile. Search runs via `sallm optimize` (optional `--profile`; default is the packaged Gemma baseline).
 
-There is no DSPy dependency. The search borrows the idea of propose → evaluate → keep winners (successive halvings), then exports plain JSON the runtime understands.
+There is no DSPy dependency. Search compiles the candidate instruction into the **same program chat runs**, scores it on every dataset case, then rewrites from the **fail traces** until mandatory cases pass (or `--rounds` is exhausted).
 
 ---
 
@@ -21,7 +21,7 @@ There is no DSPy dependency. The search borrows the idea of propose → evaluate
 | **Converse** instruction | Extra system guidance for the main ReAct skill | `--task converse` |
 | **Rewriter** instruction | Standalone retrieval sentence (when used) | `--task rewriter` |
 | **Demonstrations** | Few-shot examples in the profile | Filled by search when present; often empty at first |
-| **Budgets** | `prompt_budget`, history/retrieval caps, etc. | Mostly CLI / `ModelProfile` today; profile may store them |
+| **Budgets** | `think`, `temperature`, token caps | `--search-budgets` / `--budgets-only` (one-at-a-time grid on generation knobs) |
 | **Retrieval / embedding** | `raw` \| `instruct` \| `rewrite`, top‑k, chunk size | CLI flags / `EmbeddingProfile` |
 
 Ship empty defaults in `src/sallm/profiles/gemma4-e4b-v1.json`. Non-empty instruction strings override or supplement the built-in baselines for that task.
@@ -32,30 +32,49 @@ Ship empty defaults in `src/sallm/profiles/gemma4-e4b-v1.json`. Non-empty instru
 
 ```bash
 # 1. Write a small JSONL dataset (see format below)
-# 2. Score the baseline only
+# 2. Score the current profile instruction (per-case)
 uv run sallm optimize \
-  --dataset data/controller_cases.jsonl \
-  --task controller \
-  --evaluate-only \
-  --out /tmp/unused.json
+  --dataset examples/small_chat/opt_cases.jsonl \
+  --profile examples/small_chat/profile.json \
+  --task converse \
+  --evaluate-only
 
-# 3. Search for better instructions
+# 3b. Or search generation budgets only (temperature / max tokens / think)
 uv run sallm optimize \
-  --dataset data/controller_cases.jsonl \
-  --task controller \
-  --candidates 4 \
-  --seed 0 \
-  --model ollama/gemma4:e4b-it-qat \
-  --out .sallm/profiles/controller-v1.json
+  --dataset examples/small_chat/opt_cases.jsonl \
+  --profile examples/small_chat/profile.json \
+  --task converse \
+  --budgets-only \
+  --out examples/small_chat/profile.budgets.json
 
-# 4. Use the profile in chat
+# 3. Rewrite from failures (does not touch --profile unless you pass --out / --in-place)
+#    Use a stronger --teacher than the 0.8B student so ```run examples survive
+uv run sallm optimize \
+  --dataset examples/small_chat/opt_cases.jsonl \
+  --profile examples/small_chat/profile.json \
+  --task converse \
+  --teacher ollama_chat/gemma4:e4b-it-qat \
+  --out examples/small_chat/profile.opt.json \
+  --rounds 6 \
+  --seed 0
+
+# Optional: instruction search then budget search
+uv run sallm optimize \
+  --dataset examples/small_chat/opt_cases.jsonl \
+  --profile examples/small_chat/profile.json \
+  --task converse \
+  --teacher ollama_chat/gemma4:e4b-it-qat \
+  --search-budgets \
+  --out examples/small_chat/profile.opt.json
+
+# 4. Use the written profile in chat
 uv run sallm chat \
   --state-path .sallm/state.db \
   --vector-path .sallm/vectors \
-  --profile .sallm/profiles/controller-v1.json
+  --profile examples/small_chat/profile.opt.json
 ```
 
-Run one `--task` at a time. Merge winning instructions into one profile file by hand if you optimize several tasks (or re-run and copy fields into a combined JSON).
+`--model` defaults to `target_model` in the profile. Omit `--profile` to continue an existing `--out` file when present, else the packaged empty baseline (`sallm/profiles/gemma4-e4b-v1.json`, same as `sallm chat`). Writing merges into the destination if it already exists, so optimizing `--task controller` does not wipe a prior `instructions.converse`. Search does **not** overwrite the input unless you pass `--in-place`. `--evaluate-only` never writes. Run one `--task` at a time; other instruction keys are left intact.
 
 ---
 
@@ -68,22 +87,22 @@ One JSON object per line:
 {"id": "c2", "task": "controller", "input": {"user": "hi"}, "expected": {"action": "keep"}, "mandatory": false}
 {"id": "e1", "task": "extractor", "input": {"transcript": "[1] user: code is ZEBRA-7711"}, "expected": {"contains": ["ZEBRA"]}, "mandatory": false}
 {"id": "i1", "task": "ingest", "input": {"transcript": "[1] ingest: docker login then ssh deploy@203.0.113.10"}, "expected": {"contains": ["203.0.113.10"]}, "mandatory": false}
-{"id": "a1", "task": "converse", "input": {"user": "Say hello briefly"}, "expected": {"contains": ["hello", "hi"]}, "mandatory": false}
+{"id": "a1", "task": "converse", "input": {"user": "What is 17 times 19? Use the calc tool."}, "expected": {"tool": "calc", "argv_contains": ["17", "19"], "observation_contains": ["323"]}, "mandatory": true}
 ```
 
 | Field | Meaning |
 |-------|---------|
 | `id` | Stable case id (optional; auto `case-N` if missing) |
 | `task` | `controller` \| `extractor` \| `ingest` \| `converse` \| `rewriter` (must match `--task`, unless `--task all`) |
-| `input` | Free-form dict shown to the model as `Input: …` |
-| `expected` | For JSON tasks: fields that must match exactly (`action`, `skill`, …). For text tasks: `{"contains": ["needle", …]}` |
+| `input` | Free-form dict. Converse: `user`, optional `history`, optional `retrieved` (injected as `[Retrieved memory]`). Controller: `user`. Extractor/ingest: `transcript`. |
+| `expected` | JSON: exact fields (`action`, `skill`, `retrieval_query`) plus `contains`, `retrieval_query_contains`, `retrieval_query_nonempty`, `absent`. Converse: `contains`, `tool` / `argv_contains` / `observation_contains`, `absent`, `no_tool` |
 | `mandatory` | If `true`, a miss scores as a hard failure (−∞); average wins cannot hide it |
 
 **Tips**
 
 - Keep cases **local and small**. Ten clear controller cases beat a hundred noisy ones.
 - Mark regression guards as `mandatory` (e.g. “never push an unknown skill”, “always keep on greetings”).
-- Use the **same model** you chat with (`gemma4:e4b-it-qat`). Optimizing with a different teacher can invent instructions the 4B model cannot follow.
+- Use the **student** you chat with (`--model` / `target_model`). Use a **stronger `--teacher`** to rewrite instructions — a 0.8B teacher will strip ```run fences.
 - Fingerprint the dataset: the artifact records `dataset_fingerprint` so you know which cases produced a profile.
 
 ---
@@ -91,20 +110,36 @@ One JSON object per line:
 ## How search works
 
 ```text
-baseline instruction
+load profile.json  (instruction[task] + budgets)
         │
         ▼
-propose N variants   (Gemma rewrites: clearer/shorter, keep JSON contract)
+compile candidate into the runtime program
+  converse: Prompt.system() + optional history + user  (then parse/run ```run)
+  JSON tasks: instruction + Input dict
         │
         ▼
-successive halving   (score on a growing train subset; drop the worse half)
+evaluate ALL cases
+        │
+        ├── all mandatory pass → write profile, stop
         │
         ▼
-full-set finalists   (score remaining candidates on all cases)
+collect fail traces (id, expected, got, parsed commands, tool obs)
         │
         ▼
-save winner JSON     (instructions + demos + metrics + seed + fingerprint)
+teacher rewrites instruction to fix those fails
+        │
+        ▼
+evaluate rewrite on ALL cases; keep if better
+        │
+        ▼
+repeat up to --rounds; print winner (write only with --out / --in-place)
 ```
+
+“Better” = fewer mandatory misses, then higher mean quality, then fewer tokens.
+
+`--evaluate-only` is one full-set eval of the profile instruction (no rewrite, no write). It prints a progress bar, per-case ok/FAIL lines, then a summary panel. Search mode also prints live case marks, teacher spinner, and per-round quality / fails.
+
+Student completions use profile `budgets` (`think` for converse/rewriter, `think=False` for JSON tasks, `temperature`, matching max-token cap). The teacher rewrite always uses `think=False` and a separate `--teacher` model when set.
 
 ### Scoring
 
@@ -114,26 +149,30 @@ For each case, the scorer builds:
 \text{total} = \text{quality} - \frac{\text{tokens}}{10000} - \frac{\text{latency\_ms}}{100000} - \mathbf{1}_{\text{invalid}}\cdot 0.5
 \]
 
-- **quality** — fraction of `expected` fields matched (dict), or fraction of `contains` needles found (text).
+- **quality** — JSON: fraction of `expected` fields matched. Converse/text: mean of `contains` hits, parsed `tool` / `argv_contains` / `observation_contains` (after running ```run), plus `absent` and `no_tool` when set.
 - **tokens** — usage from the call plus an estimate of instruction+demo size (penalizes bloated prompts).
 - **latency** — soft penalty so slow verbose prompts lose ties.
 - **mandatory fail** — quality &lt; 1 on a mandatory case → total ≈ −∞.
 
-So the winner should be **correct**, preferably **short**, and not slower than needed.
+So the winner should be **correct**, preferably **short**, and not slower than needed. A prose `256` for `2**8` fails if the case requires `tool: calc` and observation `256`.
 
 ### Flags
 
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `--dataset` | required | JSONL path |
-| `--out` | required | Output profile path |
-| `--task` | `controller` | Which instruction family to search |
-| `--candidates` | `4` | Baseline + proposed rewrites |
-| `--seed` | `0` | Shuffle / proposal reproducibility |
-| `--model` / `--api-base` | Gemma / Ollama | Student and teacher (same by default) |
-| `--evaluate-only` | off | Score baseline only; do not write a searched profile |
-
-`--evaluate-only` still requires `--out` today; the file is unused in that mode. Use it to get a baseline quality number before a long search.
+| `--profile` | packaged `gemma4-e4b-v1.json` | Input CompiledProfile JSON; omit to optimize the chat default |
+| `--out` | (none) | Write merged profile here |
+| `--in-place` | off | Write the winner back into `--profile` |
+| `--task` | `controller` | Which instruction to rewrite |
+| `--rounds` | `6` | Failure-driven rewrite iterations |
+| `--seed` | `0` | Teacher prompt diversity |
+| `--model` / `--api-base` | profile `target_model` / Ollama | Student (the model that must pass the cases) |
+| `--teacher` | student `--model` | Model that rewrites the instruction from fail traces |
+| `--tools` | `echo,calc` | Tool registry used when scoring converse ```run blocks |
+| `--evaluate-only` | off | Score only; do not rewrite or write |
+| `--search-budgets` | off | After instruction search, also tune generation budgets |
+| `--budgets-only` | off | Skip instruction rewrite; search budgets only |
 
 ---
 
@@ -155,7 +194,16 @@ Example shape (schema version 1):
     "extractor": "",
     "ingest": ""
   },
-  "budgets": {},
+  "budgets": {
+    "prompt_budget": 2048,
+    "max_output_tokens": 512,
+    "recent_history_tokens": 900,
+    "retrieval_tokens": 400,
+    "control_max_tokens": 128,
+    "extract_max_tokens": 192,
+    "think": false,
+    "temperature": 0.2
+  },
   "metadata": {
     "dataset_fingerprint": "a1b2c3d4e5f60708",
     "metrics": {
@@ -173,7 +221,9 @@ Runtime load path:
 - Default packaged file: `sallm/profiles/gemma4-e4b-v1.json` (empty instructions = built-in baselines)
 - Library: `CompiledProfile.load(path)` passed into `Agent(..., compiled_profile=…)`
 
-Empty instruction strings are ignored; non-empty `converse` text is prepended into the system prompt; controller/extractor/ingest instructions replace the built-in control prompts when provided (`ingest` → `Agent.remember` / `INGEST_INSTRUCTION`).
+Profiles do **not** have to live under `src/sallm/profiles/`. Any path works — including a JSON file next to your app — or build `CompiledProfile(...)` in Python and pass `compiled_profile=` at `Agent` construction. See [`examples/small_chat/`](../examples/small_chat/) for a small-model profile (`think: false` and token caps in `budgets`). For Ollama thinking models prefer LiteLLM’s `ollama_chat/` prefix so `think` hits `/api/chat`.
+
+Empty instruction strings are ignored; non-empty `converse` text is appended **after** the built-in SYSTEM block (so it can override “skip tools if you already know”); controller/extractor/ingest instructions replace the built-in control prompts when provided (`ingest` → `Agent.remember` / `INGEST_INSTRUCTION`).
 
 **Do not** put DSPy modules, pickles, or Pydantic models in this file. Only portable strings and numbers.
 
@@ -195,6 +245,9 @@ Defaults for Gemma 4:
 | `control_max_tokens` | 256 | Max generation for goal/skill JSON |
 | `extract_max_tokens` | 384 | Max generation for fact extraction |
 | `max_output_tokens` | 1024 | Main answer/tool-step generation ceiling |
+| `think` | `None` | Ollama thinking: `false` / `true` / `"low"` / `"medium"` / `"high"` / `"max"`. Thinking and the reply share `max_output_tokens`. |
+| `think_hint` | `None` | Extra system text injected only when thinking is on |
+| `temperature` | `None` | Sampling; omit to use the provider default |
 
 Tighter history → more reliance on retrieval. Wider history → fewer retrievals needed, higher tokens per turn. Validate with `/context` (`ContextReceipt`).
 
@@ -246,14 +299,14 @@ Re-index (new session path or rebuild) if you change embedding model or dimensio
 
 ## A practical workflow
 
-1. **Baseline chat** with `--state-path` and `/context`. Note failures: wrong skill, bad retrieval query, missed facts, over-long prompts.
+1. **Baseline chat** with `--state-path` and `/context`. Note failures: wrong skill, missed facts, tools not fenced.
 2. **Write JSONL** that encodes those failures (mandatory where appropriate).
-3. **`--evaluate-only`** on the baseline instruction for that task.
-4. **`sallm optimize --search`** with a small candidate count (4–8). Prefer the same Gemma model.
-5. **Compare** artifact `metadata.metrics` quality/tokens/latency to the baseline number.
-6. **Chat with `--profile`**. Re-run the long-session recall scenario (or `tests/test_e2e_stack_memory.py`).
-7. **Keep** the profile only if quality rises and tokens/latency do not regress badly; keep the dataset fingerprint in git with the profile.
-8. **Tune budgets** only after instructions stabilize—otherwise you cannot tell whether a fix came from wording or from a larger window.
+3. **`--evaluate-only --profile …`** and read per-case FAIL lines.
+4. **`sallm optimize --profile … --task … --out path.json`** so the teacher rewrites from those fails.
+5. **Compare** `metadata.metrics` and remaining mandatory misses.
+6. **Chat with `--profile path.json`**. Re-run the scripted session.
+7. **Keep** the profile if mandatory cases pass (or misses drop) and tokens/latency do not regress badly.
+8. **Optionally `--budgets-only`** to tune temperature / max tokens / think on the fixed instruction.
 
 For parameter-only experiments (no instruction search), change one knob at a time (e.g. `top_k` 2→6) and compare `/context` + answer quality on the same scripted turns (`--script`).
 
@@ -267,16 +320,16 @@ For parameter-only experiments (no instruction search), change one knob at a tim
 | Extractor | Few grounded facts; ids exist | Ungrounded facts (runtime drops them) or constant empty `{}` when durable facts were stated |
 | Main prompt | `receipt.total_tokens` stable across long sessions | Total climbs with transcript length |
 | Profile | Beats baseline on holdout; mandatory cases pass | Higher average score but mandatory miss |
-| Search cost | Minutes on a laptop for tens of cases | Huge candidate counts with no held-out cases |
+| Search cost | Minutes on a laptop for tens of cases | Huge `--rounds` with no held-out cases |
 
 ---
 
 ## Limits
 
-- Search optimizes **instruction text** (and scoring of that text), not the full multi-call agent loop end-to-end. A great controller line can still fail if Lance is empty or embeddings are wrong.
-- Using Gemma as its own teacher can overfit the train lines. Prefer a held-out slice or separate JSONL for smoke checks after loading the profile.
-- Profile `budgets` are reserved in the artifact schema; wiring every budget field from JSON into `ModelProfile` may still require code/CLI overrides—treat CLI/`replace(profile, …)` as the source of truth until you confirm a field is loaded.
-- Do not expect MIPRO/GEPA-level magic. This is a small, readable successive-halving loop for local Gemma.
+- Converse search scores one generation: compiled `Prompt.system()` + optional `input.history` + user → parse/run ```run. Put remember-after-calc cases in the JSONL or search will overfit tools and leak “The result is” into later turns. It does not run controller or retrieval.
+- `--teacher` should be stronger than a 0.8B student. Using the student as its own teacher often deletes the ```run example the metric needs.
+- `budgets` (`think`, `temperature`, token caps) are applied from the JSON at Agent init and during optimize eval. Generation knobs can be searched with `--search-budgets` / `--budgets-only` (one-at-a-time grid). History/retrieval window sizes still need chat-level measurement — they do not change offline case scoring.
+- This is a GEPA-style fail-trace rewrite loop, not MIPRO/GEPA from the DSPy package.
 
 ---
 

@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 # Tools return this prefix when more rounds are required before a final answer.
 INTERMEDIATE_PREFIX = "[intermediate]"
 
-_RUN_BLOCK_RE = re.compile(r"```run\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+# Same-line (` ```run calc -e '2**8' ``` `) or multiline; small models mix both.
+_RUN_BLOCK_RE = re.compile(r"```run[ \t]*\n?(.*?)```", re.DOTALL | re.IGNORECASE)
 
 DEFAULT_TIMEOUT = 60
 
