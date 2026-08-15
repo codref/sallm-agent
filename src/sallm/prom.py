@@ -109,14 +109,31 @@ class SessionMetrics:
         self.remember_last_input_tokens = 0
         self.remember_last_output_tokens = 0
         self.remember_last_facts = 0
+        # Model thinking / reasoning (Ollama think, etc.).
+        self.reasoning_tokens_total = 0
+        self.reasoning_chars_total = 0
+        self.llm_thinking_calls_total = 0
+        self.last_turn_reasoning_tokens = 0
+        self.last_turn_reasoning_chars = 0
         self._httpd = None
         self._thread = None
 
-    def observe_llm(self, model, prompt_tokens, completion_tokens, total_tokens, elapsed_ms):
+    def observe_llm(
+        self,
+        model,
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        elapsed_ms,
+        reasoning_tokens=0,
+        reasoning_chars=0,
+    ):
         model = model or ""
         prompt_tokens = int(prompt_tokens or 0)
         completion_tokens = int(completion_tokens or 0)
         total_tokens = int(total_tokens or 0)
+        rtok = int(reasoning_tokens or 0)
+        rch = int(reasoning_chars or 0)
         with self._lock:
             row = self._llm.setdefault(
                 model,
@@ -134,6 +151,10 @@ class SessionMetrics:
             row["elapsed_ms"] += float(elapsed_ms or 0.0)
             row["calls"] += 1
             self._llm_total.observe(total_tokens)
+            self.reasoning_tokens_total += rtok
+            self.reasoning_chars_total += rch
+            if rtok > 0 or rch > 0:
+                self.llm_thinking_calls_total += 1
 
     def observe_tool(self, name, elapsed_ms, returncode=0):
         name = name or ""
@@ -151,6 +172,8 @@ class SessionMetrics:
         inp = int(metrics.get("prompt_tokens") or 0)
         out = int(metrics.get("completion_tokens") or 0)
         total = int(metrics.get("total_tokens") or (inp + out))
+        rtok = int(metrics.get("reasoning_tokens") or 0)
+        rch = int(metrics.get("reasoning_chars") or 0)
         with self._lock:
             self.turns += 1
             self.turn_elapsed_ms += float(metrics.get("elapsed_ms") or 0.0)
@@ -159,6 +182,8 @@ class SessionMetrics:
             self.last_turn_input = inp
             self.last_turn_output = out
             self.last_turn_total = total
+            self.last_turn_reasoning_tokens = rtok
+            self.last_turn_reasoning_chars = rch
             self._turn_input.observe(inp)
             self._turn_output.observe(out)
             self._turn_total.observe(total)
@@ -300,6 +325,16 @@ class SessionMetrics:
             "# TYPE sallm_last_turn_total_tokens gauge",
             "# HELP sallm_last_turn_index Latest turn.index (1-based).",
             "# TYPE sallm_last_turn_index gauge",
+            "# HELP sallm_reasoning_tokens_total Model thinking / reasoning tokens.",
+            "# TYPE sallm_reasoning_tokens_total counter",
+            "# HELP sallm_reasoning_chars_total Characters in model reasoning traces.",
+            "# TYPE sallm_reasoning_chars_total counter",
+            "# HELP sallm_llm_thinking_calls_total LLM calls that produced reasoning.",
+            "# TYPE sallm_llm_thinking_calls_total counter",
+            "# HELP sallm_last_turn_reasoning_tokens Reasoning tokens on the latest ask().",
+            "# TYPE sallm_last_turn_reasoning_tokens gauge",
+            "# HELP sallm_last_turn_reasoning_chars Reasoning chars on the latest ask().",
+            "# TYPE sallm_last_turn_reasoning_chars gauge",
             "# HELP sallm_turn_input_tokens Prompt tokens per ask() turn.",
             "# TYPE sallm_turn_input_tokens histogram",
             "# HELP sallm_turn_output_tokens Completion tokens per ask() turn.",
@@ -376,6 +411,26 @@ class SessionMetrics:
             )
             lines.append(
                 f"sallm_last_turn_index{_labels(**slab)} {self.last_turn_index}"
+            )
+            lines.append(
+                f"sallm_reasoning_tokens_total{_labels(**slab)} "
+                f"{self.reasoning_tokens_total}"
+            )
+            lines.append(
+                f"sallm_reasoning_chars_total{_labels(**slab)} "
+                f"{self.reasoning_chars_total}"
+            )
+            lines.append(
+                f"sallm_llm_thinking_calls_total{_labels(**slab)} "
+                f"{self.llm_thinking_calls_total}"
+            )
+            lines.append(
+                f"sallm_last_turn_reasoning_tokens{_labels(**slab)} "
+                f"{self.last_turn_reasoning_tokens}"
+            )
+            lines.append(
+                f"sallm_last_turn_reasoning_chars{_labels(**slab)} "
+                f"{self.last_turn_reasoning_chars}"
             )
             lines.append(f"sallm_stack_depth{_labels(**slab)} {self.stack_depth}")
             lines.append(f"sallm_goal_chars{_labels(**slab)} {self.goal_chars}")

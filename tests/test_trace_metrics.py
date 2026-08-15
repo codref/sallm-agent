@@ -90,3 +90,53 @@ def test_control_span_and_metrics_render():
     assert 'sallm_control_actions_total{session_id="s2",action="keep"} 1' in text
     assert 'sallm_receipt_section_tokens{session_id="s2",section="history"} 30' in text
     assert 'sallm_receipt_total_tokens{session_id="s2"} 50' in text
+
+
+def test_llm_reasoning_metrics_render():
+    events = []
+    metrics = SessionMetrics(session_id="think-1")
+    tr = Tracer(events.append, session_id="think-1", metrics=metrics)
+    tr.turn_start("x", [], model="m")
+    tr.llm(
+        model="m",
+        metrics={
+            "prompt_tokens": 10,
+            "completion_tokens": 4,
+            "total_tokens": 14,
+            "elapsed_ms": 5,
+            "reasoning_tokens": 12,
+        },
+        content="hi",
+        reasoning="let me think about it",
+    )
+    tr.turn_end(
+        answer="hi",
+        metrics={
+            "prompt_tokens": 10,
+            "completion_tokens": 4,
+            "total_tokens": 14,
+            "elapsed_ms": 5,
+            "reasoning_tokens": 12,
+            "reasoning_chars": len("let me think about it"),
+        },
+        messages=[],
+        stack=[{"skill": "converse", "depth": 0}],
+        goal="",
+        receipt=None,
+    )
+    llm = [e for e in events if e.get("kind") == "llm"]
+    assert len(llm) == 1
+    assert llm[0]["attrs"]["gen_ai.usage.reasoning_tokens"] == 12
+    assert llm[0]["attrs"]["reasoning.chars"] == len("let me think about it")
+    text = metrics.render()
+    assert 'sallm_reasoning_tokens_total{session_id="think-1"} 12' in text
+    assert (
+        f'sallm_reasoning_chars_total{{session_id="think-1"}} '
+        f'{len("let me think about it")}'
+    ) in text
+    assert 'sallm_llm_thinking_calls_total{session_id="think-1"} 1' in text
+    assert 'sallm_last_turn_reasoning_tokens{session_id="think-1"} 12' in text
+    assert (
+        f'sallm_last_turn_reasoning_chars{{session_id="think-1"}} '
+        f'{len("let me think about it")}'
+    ) in text

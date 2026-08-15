@@ -16,13 +16,13 @@
     "rewriter": ""
   },
   "budgets": {
-    "prompt_budget": 2048,
-    "max_output_tokens": 512,
+    "prompt_budget": 4096,
+    "max_output_tokens": 2048,
     "recent_history_tokens": 900,
     "retrieval_tokens": 400,
     "control_max_tokens": 128,
     "extract_max_tokens": 192,
-    "think": false,
+    "think": true,
     "temperature": 0
   },
   "metadata": {

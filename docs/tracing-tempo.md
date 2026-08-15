@@ -64,6 +64,7 @@ curl -s localhost:9464/metrics | head
 |-----|----------------|
 | **Session overview** | Turns, **active skill**, **stack depth**, receipt/budget, retrieval hits, omitted history, tool call count |
 | **Token economy** | Prompt composition (`system` / `retrieval` / `history`), tokens per turn, cumulative tokens, LLM vs tool latency, avg tokens/turn |
+| **Think / reasoning** | Last-turn reasoning tokens/chars, thinking LLM call count, reasoning vs completion over time |
 | **Stack, control, tools** | Stack depth over time, control actions (`keep`/`push`/`pop`/`replace`), tool calls + runtime by name, active skill gauge |
 | **Extract / queue lens** | Extract mode, queue depth, extract vs turn latency, miss flushes, drain mix (`lazy`/`miss`), facts vs extract calls |
 | **Remember / ingest** | `Agent.remember()` calls, last tokens/facts, source volume, remember token rate + cumulative, latency, facts vs calls, Tempo `remember` spans |
@@ -90,6 +91,18 @@ Extract-related Prometheus series (session_id label):
 | `sallm_extract_calls_total` / `sallm_extract_elapsed_ms_sum` | Extract LLM count / wall ms |
 | `sallm_extract_last_elapsed_ms` | Latest extract duration |
 | `sallm_extract_facts_total` | Grounded derived facts written |
+
+Think / reasoning Prometheus series (session_id label):
+
+| Metric | Meaning |
+|--------|---------|
+| `sallm_reasoning_tokens_total` | Cumulative model thinking / reasoning tokens |
+| `sallm_reasoning_chars_total` | Cumulative characters in reasoning traces |
+| `sallm_llm_thinking_calls_total` | LLM calls that produced non-empty reasoning |
+| `sallm_last_turn_reasoning_tokens` | Reasoning tokens on the latest `ask()` |
+| `sallm_last_turn_reasoning_chars` | Reasoning chars on the latest `ask()` |
+
+LLM spans also carry `gen_ai.usage.reasoning_tokens` and `reasoning.chars` (Tempo).
 
 Remember / ingest Prometheus series (`Agent.remember()`, session_id label):
 
@@ -127,7 +140,7 @@ docker compose up -d --force-recreate tempo grafana
 
 If TempoHTTP / Infinity panels show **Could not load plugin … react/jsx-runtime**:
 Grafana must be **≥ 12.3** for Infinity 3.11+. This repo pins `grafana/grafana:12.3.0` and
-`yesoreyeram-infinity-datasource 3.11.2`. Recreate Grafana so the plugin reinstalls:
+`yesoreyeram-infinity-datasource 3.11.1`. Recreate Grafana so the plugin reinstalls:
 
 ```bash
 docker compose up -d --force-recreate --pull always grafana

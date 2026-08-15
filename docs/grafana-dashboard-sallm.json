@@ -541,6 +541,294 @@
         "x": 0,
         "y": 21
       },
+      "id": 105,
+      "title": "Think / reasoning",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Reasoning tokens on the latest ask() (Ollama think / model reasoning).",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 22
+      },
+      "id": 80,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "title": "Last turn reasoning tokens",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "max(sallm_last_turn_reasoning_tokens{session_id=~\"$session_id\"})",
+          "legendFormat": "tokens",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Characters in the latest turn reasoning trace.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 22
+      },
+      "id": 81,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "title": "Last turn reasoning chars",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "max(sallm_last_turn_reasoning_chars{session_id=~\"$session_id\"})",
+          "legendFormat": "chars",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "LLM completions that produced a non-empty reasoning / think trace.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 22
+      },
+      "id": 82,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "title": "Thinking LLM calls",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(sallm_llm_thinking_calls_total{session_id=~\"$session_id\"}[$__range]))",
+          "legendFormat": "calls",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Cumulative reasoning tokens in the selected range (shares max_output_tokens with the reply when think is on).",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 22
+      },
+      "id": 83,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "title": "Reasoning tokens (range)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(sallm_reasoning_tokens_total{session_id=~\"$session_id\"}[$__range]))",
+          "legendFormat": "tokens",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Reasoning tokens vs completion tokens over time. High reasoning with flat answers means think is eating the output budget.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      },
+      "id": 84,
+      "title": "Reasoning vs completion tokens",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(increase(sallm_reasoning_tokens_total{session_id=~\"$session_id\"}[$__rate_interval]))",
+          "legendFormat": "reasoning",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(sallm_tokens_output_total{session_id=~\"$session_id\"}[$__rate_interval]))",
+          "legendFormat": "completion",
+          "refId": "B"
+        },
+        {
+          "expr": "max(sallm_last_turn_reasoning_tokens{session_id=~\"$session_id\"})",
+          "legendFormat": "last turn reasoning",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Reasoning character volume and thinking-call rate.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineWidth": 2
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      },
+      "id": 85,
+      "title": "Reasoning chars & thinking calls",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(increase(sallm_reasoning_chars_total{session_id=~\"$session_id\"}[$__rate_interval]))",
+          "legendFormat": "chars",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(sallm_llm_thinking_calls_total{session_id=~\"$session_id\"}[$__rate_interval]))",
+          "legendFormat": "thinking calls",
+          "refId": "B"
+        },
+        {
+          "expr": "max(sallm_last_turn_reasoning_chars{session_id=~\"$session_id\"})",
+          "legendFormat": "last turn chars",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
       "id": 102,
       "title": "Stack, control, tools",
       "type": "row"
@@ -565,7 +853,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 22
+        "y": 35
       },
       "id": 40,
       "title": "Skill stack depth",
@@ -598,7 +886,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 22
+        "y": 35
       },
       "id": 41,
       "title": "Control actions",
@@ -631,7 +919,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 22
+        "y": 35
       },
       "id": 7,
       "title": "Tool calls by name",
@@ -663,7 +951,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 30
+        "y": 43
       },
       "id": 42,
       "title": "Active skill (1 = on top of stack)",
@@ -695,7 +983,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 30
+        "y": 43
       },
       "id": 43,
       "title": "Tool runtime (cumulative ms)",
@@ -714,7 +1002,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 49
       },
       "id": 104,
       "title": "Extract / queue lens",
@@ -745,7 +1033,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 37
+        "y": 50
       },
       "id": 60,
       "options": {
@@ -788,7 +1076,7 @@
         "h": 8,
         "w": 8,
         "x": 4,
-        "y": 37
+        "y": 50
       },
       "id": 61,
       "title": "Queue depth",
@@ -822,7 +1110,7 @@
         "h": 8,
         "w": 8,
         "x": 12,
-        "y": 37
+        "y": 50
       },
       "id": 62,
       "title": "Extract latency",
@@ -878,7 +1166,7 @@
         "h": 4,
         "w": 4,
         "x": 20,
-        "y": 37
+        "y": 50
       },
       "id": 63,
       "options": {
@@ -920,7 +1208,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 45
+        "y": 58
       },
       "id": 64,
       "title": "Drain mix",
@@ -953,7 +1241,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 45
+        "y": 58
       },
       "id": 65,
       "title": "Facts written",
@@ -977,7 +1265,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 51
+        "y": 64
       },
       "id": 70,
       "title": "Remember / ingest",
@@ -1008,7 +1296,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 52
+        "y": 65
       },
       "id": 71,
       "options": {
@@ -1055,7 +1343,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 52
+        "y": 65
       },
       "id": 72,
       "options": {
@@ -1107,7 +1395,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 52
+        "y": 65
       },
       "id": 73,
       "options": {
@@ -1154,7 +1442,7 @@
         "h": 4,
         "w": 6,
         "x": 12,
-        "y": 52
+        "y": 65
       },
       "id": 74,
       "options": {
@@ -1207,7 +1495,7 @@
         "h": 4,
         "w": 6,
         "x": 18,
-        "y": 52
+        "y": 65
       },
       "id": 75,
       "options": {
@@ -1253,7 +1541,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 56
+        "y": 69
       },
       "id": 76,
       "title": "Remember tokens",
@@ -1297,7 +1585,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 56
+        "y": 69
       },
       "id": 77,
       "title": "Remember latency",
@@ -1335,7 +1623,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 64
+        "y": 77
       },
       "id": 78,
       "title": "Remember facts vs calls",
@@ -1374,7 +1662,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 64
+        "y": 77
       },
       "id": 79,
       "title": "Remember tokens (cumulative)",
@@ -1438,7 +1726,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 70
+        "y": 83
       },
       "id": 80,
       "options": {
@@ -1506,7 +1794,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 78
+        "y": 91
       },
       "id": 103,
       "title": "Traces (Tempo via HTTP search)",
@@ -1561,7 +1849,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 79
+        "y": 92
       },
       "id": 8,
       "options": {
@@ -1671,7 +1959,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 89
+        "y": 102
       },
       "id": 50,
       "options": {
@@ -1774,7 +2062,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 89
+        "y": 102
       },
       "id": 51,
       "options": {

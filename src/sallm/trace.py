@@ -324,15 +324,18 @@ class Tracer:
         end_ns = _now_ns()
         start_ns = end_ns - int((metrics.get("elapsed_ms") or 0) * 1_000_000)
         span_name = name or "chat"
+        rtok = int(metrics.get("reasoning_tokens") or 0)
+        rch = len(reasoning) if reasoning else int(metrics.get("reasoning_chars") or 0)
         attrs = {
             "gen_ai.operation.name": operation or "chat",
             "gen_ai.request.model": model or "",
             "gen_ai.usage.input_tokens": metrics.get("prompt_tokens", 0),
             "gen_ai.usage.output_tokens": metrics.get("completion_tokens", 0),
             "gen_ai.usage.total_tokens": metrics.get("total_tokens", 0),
+            "gen_ai.usage.reasoning_tokens": rtok,
             "elapsed_ms": metrics.get("elapsed_ms", 0.0),
             "content.chars": len(content),
-            "reasoning.chars": len(reasoning) if reasoning else 0,
+            "reasoning.chars": rch,
         }
         if self.debug:
             if messages is not None:
@@ -358,6 +361,8 @@ class Tracer:
                 completion_tokens=metrics.get("completion_tokens", 0),
                 total_tokens=metrics.get("total_tokens", 0),
                 elapsed_ms=metrics.get("elapsed_ms", 0.0),
+                reasoning_tokens=rtok,
+                reasoning_chars=rch,
             )
         return span_id
 
