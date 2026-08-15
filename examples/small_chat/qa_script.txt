@@ -8,7 +8,9 @@
 #   ollama pull qwen3.5:0.8b   # or whatever target_model is in --profile
 #   ollama pull qwen3-embedding:0.6b
 #   ollama create qwen3.5:0.8b-cpu -f examples/small_chat/Modelfile   # optional
+#   docker compose up -d   # Tempo + Prometheus + Grafana
 #   uv run python examples/small_chat/agent.py --script examples/small_chat/qa_script.txt
+#   # OTLP :4318 and metrics :9464 are ON by default; Grafana session_id=small-chat-demo
 #   uv run python examples/small_chat/agent.py \
 #     --profile examples/small_chat/profile-cpu.json \
 #     --script examples/small_chat/qa_script.txt

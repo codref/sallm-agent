@@ -335,6 +335,7 @@ For parameter-only experiments (no instruction search), change one knob at a tim
 
 ## Related
 
+- [Self-healing through offline optimization](self-healing-optimize.md) — plan/spec: feed, “wrong”, thresholds (not implemented)  
 - [How the agent works](how-the-agent-works.md) — turn pipeline and token-budget simulation  
 - [Skills](skills.md) — skill stack, routing, and tool subsets  
 - [README](../README.md) — CLI overview  

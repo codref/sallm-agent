@@ -152,6 +152,8 @@ When a script turn (briefing / transcript) is larger than the history budget: [d
 
 Offline prompt/parameter tuning: [docs/optimize-prompts.md](docs/optimize-prompts.md).
 
+Self-healing via optimize (plan / spec only): [docs/self-healing-optimize.md](docs/self-healing-optimize.md).
+
 Skills (selection, stack, tools): [docs/skills.md](docs/skills.md).
 
 ## License

@@ -35,6 +35,10 @@ uv run sallm chat \
   --state-path .sallm/state.db --vector-path .sallm/vectors \
   --session demo1
 
+# examples (OTLP + metrics ON by default — same ports)
+uv run python examples/small_chat/agent.py --script examples/small_chat/qa_script.txt
+# Grafana session_id = small-chat-demo (or --session …)
+
 # debug span payloads (truncated per message/field)
 uv run sallm chat --otlp http://localhost:4318 --metrics-port 9464 --trace-debug
 ```

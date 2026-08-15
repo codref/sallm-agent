@@ -20,10 +20,22 @@ How to run (from the repo root)
     # optional CPU-only tag:
     ollama create qwen3.5:0.8b-cpu -f examples/small_chat/Modelfile
 
+    # Observability stack (Tempo + Prometheus + Grafana)
+    docker compose up -d
+
+    # Interactive REPL — OTLP + Prometheus metrics are ON by default
     uv run python examples/small_chat/agent.py
     uv run python examples/small_chat/agent.py --profile examples/small_chat/profile-cpu.json
     uv run python examples/small_chat/agent.py --profile examples/small_chat/profile-gemma.json
     uv run python examples/small_chat/agent.py --script examples/small_chat/qa_script.txt
+
+Telemetry defaults (same as docs/tracing-tempo.md):
+    --otlp http://localhost:4318
+    --metrics-port 9464
+Disable with --no-otlp and --metrics-port 0. Optional JSONL: --trace /tmp/small.jsonl
+
+Grafana: http://localhost:3000 → dashboard "sallm session" → session_id=small-chat-demo
+
     uv run sallm optimize --dataset examples/small_chat/opt_cases.jsonl \
         --profile examples/small_chat/profile.json --task converse --evaluate-only
     uv run sallm optimize --dataset examples/small_chat/opt_cases.jsonl \
@@ -50,7 +62,15 @@ from rich.panel import Panel
 from sallm import Agent, CompiledProfile, RetrievalConfig
 from sallm.llm import ThinkingTruncated
 from sallm.models import resolve_embedding_profile, resolve_model_profile
+from sallm.prom import SessionMetrics
 from sallm.tools import builtin_tools
+from sallm.trace import (
+    DEFAULT_TRUNCATE,
+    Tracer,
+    jsonl_sink,
+    multi_sink,
+    otlp_http_sink,
+)
 
 console = Console()
 
@@ -60,6 +80,8 @@ STATE_DB = STATE_DIR / "state.db"
 VECTOR_DIR = STATE_DIR / "vectors"
 DEFAULT_SESSION = "small-chat-demo"
 DEFAULT_PROFILE = HERE / "profile.json"
+DEFAULT_OTLP = "http://localhost:4318"
+DEFAULT_METRICS_PORT = 9464
 
 
 def _resolve_profile_path(raw: str | None) -> Path:
@@ -75,7 +97,49 @@ def _resolve_profile_path(raw: str | None) -> Path:
     return path
 
 
-def build_agent(session_id: str, *, profile_path: Path) -> Agent:
+def build_trace(
+    *,
+    session_id: str,
+    otlp_url: str | None,
+    trace_path: Path | None,
+    metrics_port: int,
+    debug: bool = False,
+    truncate: int = DEFAULT_TRUNCATE,
+) -> Tracer | None:
+    """OTLP and/or JSONL sinks plus optional Prometheus /metrics.
+
+    ``session_id`` is shared across Agent state, Tempo ``session.id``, and
+    Prometheus labels so the Grafana "sallm session" dashboard lines up.
+    """
+    sinks = []
+    if trace_path:
+        sinks.append(jsonl_sink(str(trace_path)))
+    if otlp_url:
+        sinks.append(otlp_http_sink(otlp_url))
+    if not sinks and not metrics_port:
+        return None
+    emit = (lambda _event: None)
+    if sinks:
+        emit = sinks[0] if len(sinks) == 1 else multi_sink(*sinks)
+    tracer = Tracer(
+        emit,
+        debug=debug,
+        truncate=truncate,
+        session_id=session_id,
+    )
+    if metrics_port:
+        metrics = SessionMetrics(tracer.session_id)
+        metrics.start_server(port=int(metrics_port))
+        tracer.metrics = metrics
+    return tracer
+
+
+def build_agent(
+    session_id: str,
+    *,
+    profile_path: Path,
+    trace: Tracer | None = None,
+) -> Agent:
     """Build a durable agent from a CompiledProfile JSON path."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -104,6 +168,7 @@ def build_agent(session_id: str, *, profile_path: Path) -> Agent:
         state_path=STATE_DB,
         vector_path=VECTOR_DIR,
         session_id=session_id,
+        trace=trace,
         retrieval=RetrievalConfig(
             memory_gate=True,
             search_mode="dense",
@@ -259,10 +324,86 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Print ContextReceipt dict after each answer",
     )
+    # Telemetry ON by default (docker compose Tempo + Prometheus + Grafana).
+    parser.add_argument(
+        "--otlp",
+        default=None,
+        metavar="URL",
+        help=f"OTLP/HTTP endpoint (default: {DEFAULT_OTLP}; env SALLM_OTLP)",
+    )
+    parser.add_argument(
+        "--no-otlp",
+        action="store_true",
+        help="Disable OTLP export to Tempo",
+    )
+    parser.add_argument(
+        "--metrics-port",
+        type=int,
+        default=None,
+        metavar="PORT",
+        help=f"Prometheus /metrics port (default: {DEFAULT_METRICS_PORT}; 0=off)",
+    )
+    parser.add_argument(
+        "--trace",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Also write spans to a JSONL file",
+    )
+    parser.add_argument(
+        "--trace-debug",
+        action="store_true",
+        help="Print truncated span payloads to stderr",
+    )
+    parser.add_argument(
+        "--trace-truncate",
+        type=int,
+        default=DEFAULT_TRUNCATE,
+        help=f"Max chars per traced field (default: {DEFAULT_TRUNCATE})",
+    )
     args = parser.parse_args(argv)
 
     profile_path = _resolve_profile_path(args.profile)
-    agent = build_agent(args.session, profile_path=profile_path)
+
+    if args.no_otlp:
+        otlp_url = None
+    elif args.otlp is not None:
+        otlp_url = args.otlp.strip() or None
+    else:
+        otlp_url = (
+            (os.environ.get("SALLM_OTLP") or "").strip()
+            or DEFAULT_OTLP
+        )
+
+    if args.metrics_port is not None:
+        metrics_port = int(args.metrics_port)
+    else:
+        env_port = (os.environ.get("SALLM_METRICS_PORT") or "").strip()
+        metrics_port = int(env_port) if env_port else DEFAULT_METRICS_PORT
+
+    tracer = build_trace(
+        session_id=args.session,
+        otlp_url=otlp_url,
+        trace_path=args.trace,
+        metrics_port=metrics_port,
+        debug=args.trace_debug,
+        truncate=args.trace_truncate,
+    )
+    agent = build_agent(
+        args.session, profile_path=profile_path, trace=tracer
+    )
+
+    tel_bits = []
+    if otlp_url:
+        tel_bits.append(f"otlp:    [cyan]{otlp_url}[/]")
+    else:
+        tel_bits.append("otlp:    [dim]off[/]")
+    if metrics_port:
+        tel_bits.append(f"metrics: [cyan]:{metrics_port}/metrics[/]")
+    else:
+        tel_bits.append("metrics: [dim]off[/]")
+    if args.trace:
+        tel_bits.append(f"jsonl:   [cyan]{args.trace}[/]")
 
     console.print(
         Panel(
@@ -274,7 +415,10 @@ def main(argv: list[str] | None = None) -> int:
             f"embed:   [cyan]{agent.embedding_profile.model}[/]\n"
             f"session: [cyan]{args.session}[/]\n"
             f"state:   [cyan]{STATE_DB}[/]\n"
-            f"type /help — edit the profile JSON and restart to try new instructions",
+            + "\n".join(tel_bits)
+            + "\n"
+            "type /help — edit the profile JSON and restart to try new instructions\n"
+            "[dim]Grafana: set session_id to this session name[/]",
             border_style="green",
         )
     )
