@@ -7,7 +7,43 @@ import time
 from sallm import metrics as metrics_mod
 from sallm.llm import complete
 from sallm.messages import assistant, user
-from sallm.tools import format_observations, parse_run_blocks, run_many
+from sallm.tools import ToolResult, format_observations, prepare_commands, run_many
+
+
+def _prepare_and_run(agent, content, tr):
+    prepared = prepare_commands(content)
+    try:
+        if prepared.error:
+            results = [
+                ToolResult(
+                    name="file",
+                    command=[],
+                    error=prepared.error,
+                    returncode=-1,
+                )
+            ]
+        elif not prepared.commands:
+            results = []
+        else:
+            started = time.perf_counter()
+            results = run_many(agent.tools, prepared.commands)
+            if tr is not None:
+                batch_ms = (time.perf_counter() - started) * 1000
+                per = batch_ms / max(len(results), 1)
+                for r in results:
+                    tr.tool(
+                        name=r.name,
+                        command=r.command,
+                        observation=r.observation,
+                        stdout=r.stdout,
+                        stderr=r.stderr,
+                        returncode=r.returncode,
+                        intermediate=r.intermediate,
+                        elapsed_ms=per,
+                    )
+        return results
+    finally:
+        prepared.cleanup()
 
 
 def ask_legacy(agent, user_text: str):
@@ -66,24 +102,8 @@ def ask_legacy(agent, user_text: str):
                 messages=prompt,
             )
         content = result.get("content") or ""
-        commands = parse_run_blocks(content) if agent.tools else []
-        if commands:
-            started = time.perf_counter()
-            results = run_many(agent.tools, commands)
-            if tr is not None:
-                batch_ms = (time.perf_counter() - started) * 1000
-                per = batch_ms / max(len(results), 1)
-                for r in results:
-                    tr.tool(
-                        name=r.name,
-                        command=r.command,
-                        observation=r.observation,
-                        stdout=r.stdout,
-                        stderr=r.stderr,
-                        returncode=r.returncode,
-                        intermediate=r.intermediate,
-                        elapsed_ms=per,
-                    )
+        results = _prepare_and_run(agent, content, tr) if agent.tools else []
+        if results:
             observation = format_observations(results)
             pending = any(r.intermediate for r in results)
             follow = observation

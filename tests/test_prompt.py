@@ -13,6 +13,7 @@ def test_prompt_system_includes_tools_and_policy():
     assert "Multi-step mode is ON" in text
     assert "finish the rest of that user request" in text
     assert "```run" in text
+    assert "```file name" in text or "@name" in text
     assert "tool-advice" not in text.lower()
 
 

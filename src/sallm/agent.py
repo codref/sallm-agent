@@ -30,6 +30,7 @@ from .messages import DEFAULT_API_BASE, DEFAULT_MODEL, assistant, system, user
 from .models import (
     EmbeddingProfile,
     ModelProfile,
+    coerce_think,
     resolve_embedding_profile,
     resolve_model_profile,
 )
@@ -49,11 +50,27 @@ def _nonempty(value) -> str | None:
     return text or None
 
 
+def _header_map(headers) -> dict[str, str] | None:
+    """Copy a header mapping into plain strings, dropping empty values."""
+    if not isinstance(headers, dict):
+        return None
+    cleaned = {}
+    for key, value in headers.items():
+        name = str(key).strip()
+        text = str(value).strip() if value is not None else ""
+        if name and text:
+            cleaned[name] = text
+    return cleaned or None
+
+
 class Agent:
     def __init__(
         self,
         model=None,
         api_base=None,
+        api_key=None,
+        extra_headers=None,
+        think=None,
         tools=None,
         system=None,
         max_steps=5,
@@ -78,6 +95,9 @@ class Agent:
     ):
         self.model = model or DEFAULT_MODEL
         self.api_base = api_base or DEFAULT_API_BASE
+        key_text = api_key.strip() if isinstance(api_key, str) else ""
+        self.api_key = key_text or None
+        self.extra_headers = _header_map(extra_headers)
         self.tools = normalize_registry(tools)
         self.max_steps = max_steps
         self.multi_step = multi_step
@@ -96,6 +116,12 @@ class Agent:
         self.compiled_profile = compiled_profile
         if compiled_profile is not None:
             self.profile = compiled_profile.apply_budgets(self.profile)
+        if self.api_key:
+            self.profile = replace(self.profile, api_key=self.api_key)
+        if self.extra_headers:
+            self.profile = replace(self.profile, extra_headers=self.extra_headers)
+        if think is not None:
+            self.profile = replace(self.profile, think=coerce_think(think))
         self.extract_mode = normalize_extract_mode(extract_mode)
 
         if retrieval is not None:

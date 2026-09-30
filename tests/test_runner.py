@@ -8,7 +8,9 @@ from sallm.tools import (
     builtin_tools,
     format_observations,
     help_text,
+    parse_file_blocks,
     parse_run_blocks,
+    prepare_commands,
     reset_dig_state,
     run_many,
     run_tool,
@@ -53,6 +55,74 @@ echo --text Tom's code diagram missing component
     assert cmds[0][0] == "echo"
     assert "--text" in cmds[0]
     assert "Tom's" in cmds[0]
+
+
+def test_parse_file_blocks_multiline_and_apostrophe():
+    text = """```file note
+# Tom's notes
+
+Line two with "quotes"
+```"""
+    files = parse_file_blocks(text)
+    assert "note" in files
+    assert "Tom's notes" in files["note"]
+    assert 'Line two with "quotes"' in files["note"]
+
+
+def test_prepare_commands_substitutes_at_name_and_cleans_up():
+    text = """```run
+echo --text @note
+```
+```file note
+hello
+world
+```"""
+    prepared = prepare_commands(text)
+    try:
+        assert prepared.error is None
+        assert len(prepared.commands) == 1
+        path = prepared.commands[0][-1]
+        assert path.endswith(".md")
+        from pathlib import Path
+
+        assert Path(path).read_text(encoding="utf-8") == "hello\nworld\n"
+        temps = list(prepared._temps)
+    finally:
+        prepared.cleanup()
+    from pathlib import Path
+
+    for path in temps:
+        assert not Path(path).exists()
+
+
+def test_prepare_commands_unknown_ref_errors_without_temps():
+    text = """```run
+echo --text @missing
+```"""
+    prepared = prepare_commands(text)
+    try:
+        assert prepared.error is not None
+        assert "@missing" in prepared.error
+        assert prepared._temps == []
+    finally:
+        prepared.cleanup()
+
+
+def test_prepare_commands_runs_tool_with_file_body():
+    text = """```run
+echo --text @note
+```
+```file note
+payload
+```"""
+    prepared = prepare_commands(text)
+    try:
+        path = prepared.commands[0][-1]
+        results = run_many(TOOLS, [["echo", "--text", path]])
+        assert results[0].returncode == 0
+        assert path in results[0].observation
+    finally:
+        prepared.cleanup()
 
 
 def test_calc_subprocess():

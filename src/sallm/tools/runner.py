@@ -2,17 +2,28 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from pathlib import Path
 
 # Tools return this prefix when more rounds are required before a final answer.
 INTERMEDIATE_PREFIX = "[intermediate]"
 
 # Same-line (` ```run calc -e '2**8' ``` `) or multiline; small models mix both.
 _RUN_BLOCK_RE = re.compile(r"```run[ \t]*\n?(.*?)```", re.DOTALL | re.IGNORECASE)
+
+# Multiline payloads: ```file name ... ``` referenced as @name in ```run argv.
+_FILE_NAME = r"[A-Za-z0-9_.-]+"
+_FILE_BLOCK_RE = re.compile(
+    rf"```file[ \t]+({_FILE_NAME})[ \t]*\n(.*?)```",
+    re.DOTALL | re.IGNORECASE,
+)
+_FILE_REF_RE = re.compile(rf"^@({_FILE_NAME})$")
 
 DEFAULT_TIMEOUT = 60
 
@@ -133,6 +144,104 @@ def parse_run_blocks(text) -> list[list[str]]:
             if argv:
                 commands.append(argv)
     return commands
+
+
+def parse_file_blocks(text) -> dict[str, str]:
+    """Extract `` ```file <name> `` bodies (last block wins per name)."""
+    text = text or ""
+    out: dict[str, str] = {}
+    for match in _FILE_BLOCK_RE.finditer(text):
+        out[match.group(1)] = match.group(2)
+    return out
+
+
+@dataclass
+class PreparedRun:
+    """Parsed ```run commands with ```file payloads materialized to temp paths."""
+
+    commands: list[list[str]] = field(default_factory=list)
+    error: str | None = None
+    _temps: list[str] = field(default_factory=list, repr=False)
+
+    def cleanup(self) -> None:
+        for path in self._temps:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        self._temps.clear()
+
+
+def _rewrite_file_refs(
+    commands: list[list[str]], paths: dict[str, str]
+) -> tuple[list[list[str]], list[str]]:
+    """Replace ``@name`` argv tokens with absolute paths. Return missing names."""
+    missing: list[str] = []
+    rewritten: list[list[str]] = []
+    for argv in commands:
+        new_argv: list[str] = []
+        for arg in argv:
+            m = _FILE_REF_RE.match(arg)
+            if not m:
+                new_argv.append(arg)
+                continue
+            name = m.group(1)
+            if name not in paths:
+                if name not in missing:
+                    missing.append(name)
+                new_argv.append(arg)
+            else:
+                new_argv.append(paths[name])
+        rewritten.append(new_argv)
+    return rewritten, missing
+
+
+def prepare_commands(text) -> PreparedRun:
+    """Parse ```run and ```file fences; write file bodies to temps; rewrite ``@name``.
+
+    Callers must always invoke :meth:`PreparedRun.cleanup` (typically in ``finally``).
+    When ``error`` is set, do not run ``commands`` — surface the error as a tool
+    observation instead.
+    """
+    files = parse_file_blocks(text)
+    commands = parse_run_blocks(text)
+    if not commands and not files:
+        return PreparedRun()
+
+    temps: list[str] = []
+    paths: dict[str, str] = {}
+    try:
+        for name, body in files.items():
+            fd, path = tempfile.mkstemp(prefix="sallm-file-", suffix=".md")
+            temps.append(path)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(body)
+            paths[name] = str(Path(path).resolve())
+
+        rewritten, missing = _rewrite_file_refs(commands, paths)
+        if missing:
+            for path in temps:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            names = ", ".join(f"@{n}" for n in missing)
+            return PreparedRun(
+                commands=commands,
+                error=(
+                    f"Error: unknown file ref(s) {names}. "
+                    "Emit a ```file <name> block with the payload, then "
+                    "reference it as @<name> in the ```run line."
+                ),
+            )
+        return PreparedRun(commands=rewritten, _temps=temps)
+    except Exception:
+        for path in temps:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        raise
 
 
 def run_tool(

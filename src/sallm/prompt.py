@@ -22,6 +22,10 @@ toolname --flag value
 another --flag value
 ```
 
+For large or multiline payloads, put the body in a ```file name block and pass
+@name as a flag value (for example --content-file @note). Do not paste long
+text into a ```run line.
+
 Multiple lines run as concurrent processes in one step.
 If you are unsure of a tool's flags, run `toolname --help` inside a ```run block first.
 Never invent tool output. After finished tool results, reply in short plain text.
@@ -103,6 +107,8 @@ class CompiledProfile:
         allowed = {f.name for f in fields(ModelProfile)} - {
             "model",
             "api_base",
+            "api_key",
+            "extra_headers",
             "version",
         }
         updates = {}

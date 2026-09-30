@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from sallm.prompt import CompiledProfile, Prompt
-from sallm.tools import format_observations, parse_run_blocks, run_many, tool_descriptions
+from sallm.tools import format_observations, prepare_commands, run_many, tool_descriptions
 
 from .dataset import Case
 
@@ -97,18 +97,26 @@ def tools_text_for(registry: dict) -> str:
 
 
 def materialize_got(content: str, registry: dict, expected: dict | None) -> dict:
-    """Parse ```run blocks and optionally execute them for the metric."""
+    """Parse ```run / ```file blocks and optionally execute them for the metric."""
     content = content or ""
-    commands = parse_run_blocks(content)
-    expected = expected or {}
-    observation = ""
-    should_run = bool(commands) and (
-        expected.get("tool") or expected.get("observation_contains")
-    )
-    if should_run and registry:
-        observation = format_observations(run_many(registry, commands))
-    return {
-        "content": content,
-        "commands": commands,
-        "observation": observation,
-    }
+    prepared = prepare_commands(content)
+    try:
+        commands = list(prepared.commands)
+        observation = ""
+        expected = expected or {}
+        should_run = bool(commands) and (
+            expected.get("tool") or expected.get("observation_contains")
+        )
+        if prepared.error:
+            observation = prepared.error
+            commands = list(prepared.commands)
+        elif should_run and registry:
+            observation = format_observations(run_many(registry, commands))
+        return {
+            "content": content,
+            "commands": commands,
+            "observation": observation,
+        }
+    finally:
+        prepared.cleanup()
+

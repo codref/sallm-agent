@@ -10,8 +10,9 @@ from sallm.llm import complete
 from sallm.messages import assistant, user
 from sallm.receipt import compile_prompt_messages
 from sallm.tools import (
+    ToolResult,
     format_observations,
-    parse_run_blocks,
+    prepare_commands,
     run_many,
 )
 
@@ -87,6 +88,25 @@ class TurnRunner:
             )
         return results
 
+    def _prepare_and_run_tools(self, content, tools):
+        """Materialize ```file refs, run tools, always cleanup temps."""
+        prepared = prepare_commands(content)
+        try:
+            if prepared.error:
+                return [
+                    ToolResult(
+                        name="file",
+                        command=[],
+                        error=prepared.error,
+                        returncode=-1,
+                    )
+                ]
+            if not prepared.commands:
+                return []
+            return self._run_tools(prepared.commands, tools)
+        finally:
+            prepared.cleanup()
+
     def _record_action(self, content, result, step_metrics, results):
         observation = format_observations(results)
         pending = any(r.intermediate for r in results)
@@ -146,10 +166,11 @@ class TurnRunner:
             self.agent.last_receipt = receipt
             result, step_metrics, turn_metrics = self._complete(view, turn_metrics)
             content = result.get("content") or ""
-            commands = parse_run_blocks(content) if tools else []
+            results = (
+                self._prepare_and_run_tools(content, tools) if tools else []
+            )
 
-            if commands:
-                results = self._run_tools(commands, tools)
+            if results:
                 step = self._record_action(content, result, step_metrics, results)
                 steps.append(step)
                 acted = True
@@ -205,21 +226,22 @@ class TurnRunner:
                 turn_metrics,
             )
             answer = result.get("content") or ""
-            if parse_run_blocks(answer) and tools:
-                results = self._run_tools(parse_run_blocks(answer), tools)
-                steps.append(
-                    self._record_action(answer, result, step_metrics, results)
-                )
-                result, step_metrics, turn_metrics = self._complete(
-                    compile_prompt_messages(
-                        profile=self.agent.profile,
-                        prompt=self.agent.prompt,
-                        recent_messages=self.agent.messages,
-                        hits=self.agent._last_hits,
-                    )[0],
-                    turn_metrics,
-                )
-                answer = result.get("content") or ""
+            if tools:
+                results = self._prepare_and_run_tools(answer, tools)
+                if results:
+                    steps.append(
+                        self._record_action(answer, result, step_metrics, results)
+                    )
+                    result, step_metrics, turn_metrics = self._complete(
+                        compile_prompt_messages(
+                            profile=self.agent.profile,
+                            prompt=self.agent.prompt,
+                            recent_messages=self.agent.messages,
+                            hits=self.agent._last_hits,
+                        )[0],
+                        turn_metrics,
+                    )
+                    answer = result.get("content") or ""
             steps.append(
                 {
                     "kind": "final",

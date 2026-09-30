@@ -52,6 +52,10 @@ class ModelProfile:
 
     model: str = DEFAULT_MODEL
     api_base: str = DEFAULT_API_BASE
+    # OpenAI-compatible credential. Not part of a compiled profile; callers set it.
+    api_key: str | None = None
+    # Optional HTTP headers (User-Agent, routing ids). Not part of a profile.
+    extra_headers: dict | None = None
     # Soft prompt budget for the main ReAct call (estimated tokens).
     prompt_budget: int = 4096
     max_output_tokens: int = 1024
@@ -82,6 +86,10 @@ class ModelProfile:
             kw["think"] = self.think
         if self.temperature is not None:
             kw["temperature"] = float(self.temperature)
+        if self.api_key:
+            kw["api_key"] = self.api_key
+        if self.extra_headers:
+            kw["extra_headers"] = dict(self.extra_headers)
         return kw
 
 
