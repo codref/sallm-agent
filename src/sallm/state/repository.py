@@ -9,6 +9,7 @@ from pathlib import Path
 from .models import (
     ALL_TABLES,
     SCHEMA_VERSION,
+    Attachment,
     DerivedMemory,
     MemoryChunk,
     Message,
@@ -46,6 +47,28 @@ class StoredChunk:
 
 
 @dataclass(frozen=True)
+class StoredAttachment:
+    id: str
+    message_id: int
+    role: str
+    mime: str
+    sha256: str
+    filename: str
+    path: str
+    caption: str = ""
+
+    def as_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "role": self.role,
+            "path": self.path,
+            "mime": self.mime,
+            "filename": self.filename,
+            "caption": self.caption,
+        }
+
+
+@dataclass(frozen=True)
 class PendingExtractJob:
     id: int
     anchor_message_id: int
@@ -76,9 +99,11 @@ class SessionRepository:
         ver = int(row.value)
         if ver == SCHEMA_VERSION:
             return
-        if ver == 1 and SCHEMA_VERSION == 2:
-            # PendingExtract created via create_tables; just bump the marker.
-            SchemaMeta.update(value="2").where(SchemaMeta.key == "version").execute()
+        if 1 <= ver < SCHEMA_VERSION:
+            # New tables are created above; bump the marker.
+            SchemaMeta.update(value=str(SCHEMA_VERSION)).where(
+                SchemaMeta.key == "version"
+            ).execute()
             return
         raise RuntimeError(
             f"unsupported state schema {row.value}; expected {SCHEMA_VERSION}"
@@ -311,6 +336,78 @@ class SessionRepository:
                     ids.append(int(part))
             out.append((row.text, ids))
         return out
+
+    def _stored_attachment(self, row) -> StoredAttachment:
+        return StoredAttachment(
+            id=row.id,
+            message_id=row.message_id,
+            role=row.role,
+            mime=row.mime,
+            sha256=row.sha256,
+            filename=row.filename,
+            path=row.path,
+            caption=row.caption or "",
+        )
+
+    def add_attachment(
+        self,
+        session_id: str,
+        *,
+        attachment_id: str,
+        message_id: int,
+        role: str,
+        mime: str,
+        sha256: str,
+        filename: str,
+        path: str,
+    ) -> StoredAttachment:
+        with db.atomic():
+            existing = Attachment.get_or_none(Attachment.id == attachment_id)
+            if existing is not None:
+                return self._stored_attachment(existing)
+            row = Attachment.create(
+                id=attachment_id,
+                session=session_id,
+                message_id=int(message_id),
+                role=role,
+                mime=mime,
+                sha256=sha256,
+                filename=filename,
+                path=path,
+                caption="",
+            )
+            return self._stored_attachment(row)
+
+    def set_caption(self, attachment_id: str, caption: str):
+        Attachment.update(caption=caption or "").where(
+            Attachment.id == attachment_id
+        ).execute()
+
+    def list_attachments(self, session_id: str) -> list[StoredAttachment]:
+        q = (
+            Attachment.select()
+            .where(Attachment.session == session_id)
+            .order_by(Attachment.message_id, Attachment.filename)
+        )
+        return [self._stored_attachment(row) for row in q]
+
+    def find_attachment_by_caption(
+        self,
+        session_id: str,
+        caption: str,
+        *,
+        message_id: int | None = None,
+    ) -> StoredAttachment | None:
+        text = (caption or "").strip()
+        if not text:
+            return None
+        q = Attachment.select().where(Attachment.session == session_id)
+        if message_id is not None:
+            q = q.where(Attachment.message_id == int(message_id))
+        for row in q:
+            if (row.caption or "").strip() == text:
+                return self._stored_attachment(row)
+        return None
 
     def enqueue_extract(self, session_id: str, anchor_message_id: int) -> PendingExtractJob:
         row = PendingExtract.create(

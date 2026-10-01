@@ -62,11 +62,57 @@ EARLY_ANSWER_NUDGE = (
 )
 
 RESULTS_PREFIX = "Tool results:\n"
+VISION_INSTRUCTION = """Images may appear in two places. Treat them differently.
+
+Question: an image on a user message is part of what they are asking.
+Answer from what is visible there. Name boxes, arrows, labels, and colors
+you can actually see. If a label is unreadable, say so. Do not invent steps,
+hosts, or numbers that are not in the image or the text.
+
+Context: an image under [Retrieved memory] is an earlier diagram brought
+back for this turn. Use it as background. Do not treat it as a new upload.
+If both a question image and a context image are present, compare them
+only when the user asked for a comparison.
+
+Answer the question. Do not describe the whole image unless they asked
+for a description. Do not run tools to interpret the image."""
+
+CAPTION_INSTRUCTION = """Describe this image in one or two sentences for later search.
+Name the kind of figure (diagram, screenshot, chart, photo) and the
+visible structure (boxes, arrows, labels, colors).
+Copy readable labels verbatim.
+Do not guess hidden meaning. Do not answer a question. Plain text only."""
+
+VISION_CONTROL_NOTE = """retrieval_query: a short phrase from the caption when the user refers to an
+earlier diagram, "the figure", "like this", or "the one from before".
+Use "" when they are only asking about the image on this turn and nothing
+earlier is needed. Do not put file paths or @ tokens in retrieval_query."""
+
 REMAINING_NUDGE = (
     "If the user's last request has anything left besides this tool "
     "(recall, remind, a second fact), do that now using [Retrieved memory] "
     "when present. Otherwise one short sentence with the result."
 )
+
+def _instruction(compiled: CompiledProfile | None, key: str, fallback: str) -> str:
+    if compiled is not None:
+        text = str(compiled.instructions.get(key) or "").strip()
+        if text:
+            return text
+    return fallback
+
+
+def vision_instruction(compiled: CompiledProfile | None = None) -> str:
+    return _instruction(compiled, "vision", VISION_INSTRUCTION)
+
+
+def caption_instruction(compiled: CompiledProfile | None = None) -> str:
+    return _instruction(compiled, "caption", CAPTION_INSTRUCTION)
+
+
+def vision_control_rules(compiled: CompiledProfile | None = None) -> str:
+    return _instruction(compiled, "vision_control", VISION_CONTROL_NOTE)
+
 
 # Packaged empty baseline (same default as `sallm chat` / `sallm optimize`).
 DEFAULT_PROFILE_PATH = (
@@ -166,7 +212,7 @@ class Prompt:
     def policy(self) -> str:
         return self.MULTI_STEP_ON if self.multi_step else self.MULTI_STEP_OFF
 
-    def system(self) -> str:
+    def system(self, *, vision: bool = False) -> str:
         converse_extra = ""
         if self.compiled and self.compiled.instructions.get("converse"):
             converse_extra = str(self.compiled.instructions["converse"]).strip()
@@ -199,6 +245,8 @@ class Prompt:
         # trace off the answer" nudge put it in budgets.think_hint.
         if think_on(self.think) and self.think_hint:
             parts.append(self.think_hint)
+        if vision:
+            parts.append(vision_instruction(self.compiled))
         return "\n\n".join(parts)
 
     def as_dict(self) -> dict:

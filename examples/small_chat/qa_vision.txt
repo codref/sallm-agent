@@ -1,0 +1,19 @@
+# Vision chat — Gemma 4 sees a diagram, then recalls it.
+# Run from the repo root:
+#   uv run python examples/small_chat/agent.py --profile examples/small_chat/profile-gemma4-e4b-vision.json --script examples/small_chat/qa_vision.txt
+
+# Question image on this turn.
+@examples/small_chat/fixtures/diagram.png What colors are in this diagram? Name both colors.
+
+# The picture stays on the earlier turn. Do not upload again.
+Which color is on the left? Answer with one color name.
+
+# Filler, to push the diagram out of the recent-history window.
+In one short sentence, what is a hash table good for?
+Name three primary colors.
+What is the capital of France? Answer in one word.
+Give me a two-word synonym for "happy".
+What is 2 plus 2? Answer with the digit only.
+
+# Caption index should bring the diagram back as context.
+What did the earlier diagram look like? Name the colors you can see.

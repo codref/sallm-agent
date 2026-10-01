@@ -39,6 +39,7 @@ class MemoryIndexer:
         chunks: list[str],
         source_message_id: int | None = None,
         kind: str = "raw",
+        metadata: dict | None = None,
     ) -> list[StoredChunk]:
         stored: list[StoredChunk] = []
         pending: list[VectorRecord] = []
@@ -69,7 +70,13 @@ class MemoryIndexer:
                         source_id=str(source_message_id)
                         if source_message_id is not None
                         else None,
-                        metadata={"kind": kind},
+                        metadata=self._chunk_metadata(
+                            session_id,
+                            kind,
+                            piece,
+                            source_message_id,
+                            metadata,
+                        ),
                     )
                 )
         if pending:
@@ -96,13 +103,48 @@ class MemoryIndexer:
                     source_id=str(row.source_message_id)
                     if row.source_message_id is not None
                     else None,
-                    metadata={"kind": row.kind},
+                    metadata=self._chunk_metadata(
+                        session_id,
+                        row.kind,
+                        row.text,
+                        row.source_message_id,
+                        None,
+                    ),
                 )
             )
         self.store.upsert(records)
         for rec in records:
             self.repo.mark_indexed(rec.id)
         return len(records)
+
+    def _chunk_metadata(
+        self,
+        session_id: str,
+        kind: str,
+        text: str,
+        source_message_id: int | None,
+        extra: dict | None,
+    ) -> dict:
+        meta = {"kind": kind}
+        if extra:
+            meta.update(extra)
+        if kind == "image" and meta.get("modality") != "image":
+            finder = getattr(self.repo, "find_attachment_by_caption", None)
+            att = (
+                finder(session_id, text, message_id=source_message_id)
+                if finder is not None
+                else None
+            )
+            if att is not None:
+                meta.update(
+                    {
+                        "modality": "image",
+                        "attachment_id": att.id,
+                        "path": att.path,
+                        "mime": att.mime,
+                    }
+                )
+        return meta
 
     def rebuild(self, session_id: str) -> int:
         """Drop session vectors and re-index every SQLite chunk."""
@@ -122,7 +164,13 @@ class MemoryIndexer:
                     source_id=str(row.source_message_id)
                     if row.source_message_id is not None
                     else None,
-                    metadata={"kind": row.kind},
+                    metadata=self._chunk_metadata(
+                        session_id,
+                        row.kind,
+                        row.text,
+                        row.source_message_id,
+                        None,
+                    ),
                 )
             )
         self.store.upsert(records)

@@ -283,6 +283,27 @@ def propose_from_failures(
             failures=fail_blob,
             round_index=round_index,
         )
+    elif task == "vision":
+        prompt = (
+            f"This vision instruction failed these cases. Rewrite it so a small "
+            f"local multimodal model would pass them. Keep the split between a "
+            f"question image (on the user message) and a context image (under "
+            f"[Retrieved memory]). Do not invent labels that are not visible. "
+            f"Do not tell the model to run tools to interpret the image.\n"
+            f"Return only the new instruction text.\n\n"
+            f"Instruction:\n{instruction}\n\n"
+            f"Failures:\n{fail_blob}\n\nRound {round_index}."
+        )
+    elif task == "caption":
+        prompt = (
+            f"This caption instruction failed these cases. Rewrite it so a small "
+            f"local multimodal model would pass them. The reply must be one or "
+            f"two plain sentences for later search, copying readable labels and "
+            f"not inventing ones that are absent. Do not answer a question.\n"
+            f"Return only the new instruction text.\n\n"
+            f"Instruction:\n{instruction}\n\n"
+            f"Failures:\n{fail_blob}\n\nRound {round_index}."
+        )
     elif task == "controller":
         prompt = (
             f"This controller instruction failed these cases. Rewrite it so a "

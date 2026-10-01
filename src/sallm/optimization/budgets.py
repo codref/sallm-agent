@@ -21,6 +21,16 @@ _TASK_AXES: dict[str, dict[str, list]] = {
         "max_output_tokens": [64, 128, 256, 384, 512],
         "think": [False, True],
     },
+    "vision": {
+        "temperature": [0.0, 0.1, 0.2, 0.35, 0.5],
+        "max_output_tokens": [64, 128, 256, 384, 512],
+        "think": [False, True],
+    },
+    "caption": {
+        "temperature": [0.0, 0.1, 0.2],
+        "max_output_tokens": [64, 96, 128],
+        "think": [False],
+    },
     "rewriter": {
         "temperature": [0.0, 0.1, 0.2, 0.35, 0.5],
         "max_output_tokens": [64, 128, 256, 384],

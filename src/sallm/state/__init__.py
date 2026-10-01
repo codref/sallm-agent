@@ -3,6 +3,7 @@
 from .repository import (
     PendingExtractJob,
     SessionRepository,
+    StoredAttachment,
     StoredChunk,
     StoredFrame,
     StoredMessage,
@@ -11,6 +12,7 @@ from .repository import (
 __all__ = [
     "PendingExtractJob",
     "SessionRepository",
+    "StoredAttachment",
     "StoredChunk",
     "StoredFrame",
     "StoredMessage",

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "target_model": "ollama/gemma4:e4b-it-qat",
+  "instructions": {
+    "controller": "",
+    "extractor": "",
+    "ingest": "",
+    "converse": "",
+    "rewriter": "",
+    "vision": "Images may appear in two places. Treat them differently.\n\nQuestion: an image on a user message is part of what they are asking.\nAnswer from what is visible there. Name boxes, arrows, labels, and colors\nyou can actually see. If a label is unreadable, say so. Do not invent steps,\nhosts, or numbers that are not in the image or the text.\n\nContext: an image under [Retrieved memory] is an earlier diagram brought\nback for this turn. Use it as background. Do not treat it as a new upload.\nIf both a question image and a context image are present, compare them\nonly when the user asked for a comparison.\n\nAnswer the question. Do not describe the whole image unless they asked\nfor a description. Do not run tools to interpret the image.",
+    "caption": "Describe this image in one or two sentences for later search.\nName the kind of figure (diagram, screenshot, chart, photo) and the\nvisible structure (boxes, arrows, labels, colors).\nCopy readable labels verbatim.\nDo not guess hidden meaning. Do not answer a question. Plain text only.",
+    "vision_control": "retrieval_query: a short phrase from the caption when the user refers to an\nearlier diagram, \"the figure\", \"like this\", or \"the one from before\".\nUse \"\" when they are only asking about the image on this turn and nothing\nearlier is needed. Do not put file paths or @ tokens in retrieval_query."
+  },
+  "demonstrations": {
+    "controller": "",
+    "extractor": "",
+    "ingest": "",
+    "converse": "",
+    "rewriter": "",
+    "vision": "",
+    "caption": "",
+    "vision_control": ""
+  },
+  "budgets": {
+    "prompt_budget": 4096,
+    "max_output_tokens": 512,
+    "recent_history_tokens": 1800,
+    "retrieval_tokens": 800,
+    "image_tokens": 280,
+    "control_max_tokens": 256,
+    "extract_max_tokens": 384,
+    "think": false,
+    "temperature": 0
+  },
+  "metadata": {
+    "note": "Gemma 4 vision example. Seeds match the built-in vision, caption, and controller-note instructions."
+  }
+}

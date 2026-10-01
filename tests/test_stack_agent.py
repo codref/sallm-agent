@@ -237,9 +237,9 @@ def test_schema_version_2(tmp_path):
     from sallm.state.models import SCHEMA_VERSION, PendingExtract, SchemaMeta
 
     repo = SessionRepository(tmp_path / "v2.db")
-    assert SCHEMA_VERSION == 2
+    assert SCHEMA_VERSION == 3
     row = SchemaMeta.get(SchemaMeta.key == "version")
-    assert row.value == "2"
+    assert row.value == "3"
     repo.ensure_session("s")
     job = repo.enqueue_extract("s", 1)
     assert job.status == "pending"

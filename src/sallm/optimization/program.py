@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from sallm.attachments import content_parts, mime_for
 from sallm.prompt import CompiledProfile, Prompt
 from sallm.tools import format_observations, prepare_commands, run_many, tool_descriptions
 
@@ -59,6 +60,38 @@ def converse_messages(
         if content:
             messages.append({"role": role, "content": content})
     messages.append({"role": "user", "content": user_text})
+    images = [item for item in (case.input.get("images") or []) if isinstance(item, dict)]
+    question = [item for item in images if (item.get("role") or "question") != "context"]
+    context = [item for item in images if (item.get("role") or "question") == "context"]
+    if question and messages[-1].get("role") == "user":
+        messages[-1] = {
+            "role": "user",
+            "content": content_parts(str(messages[-1].get("content") or ""), question),
+        }
+    if context:
+        host = None
+        for index, message in enumerate(messages):
+            content = message.get("content")
+            if (
+                message.get("role") == "user"
+                and isinstance(content, str)
+                and content.startswith("[Retrieved memory]")
+            ):
+                host = index
+                break
+        if host is None:
+            messages.insert(
+                1,
+                {
+                    "role": "user",
+                    "content": content_parts("[Retrieved memory]", context),
+                },
+            )
+        else:
+            messages[host] = {
+                "role": "user",
+                "content": content_parts(str(messages[host].get("content") or ""), context),
+            }
     return messages
 
 
@@ -77,6 +110,9 @@ def control_user_prompt(case: Case, instruction: str, demos: str = "") -> str:
     if demos:
         prompt += f"\nExamples:\n{demos}\n"
     prompt += f"\nUser message:\n{user_text}\n"
+    attached = case.input.get("attached") or ""
+    if isinstance(attached, str) and attached.strip():
+        prompt += f"\n{attached.strip()}\n"
     return prompt
 
 
@@ -88,6 +124,18 @@ def extract_user_prompt(case: Case, instruction: str, demos: str = "") -> str:
         prompt += f"Examples:\n{demos}\n"
     prompt += f"\nTranscript:\n{transcript}\n"
     return prompt
+
+
+def caption_messages(case: Case, instruction: str) -> list[dict]:
+    """User message: caption instruction plus the case image."""
+    path = case.input.get("image") or case.input.get("path") or ""
+    image = {"path": str(path), "mime": mime_for(path) if path else "image/png"}
+    return [
+        {
+            "role": "user",
+            "content": content_parts(instruction, [image] if path else []),
+        }
+    ]
 
 
 def tools_text_for(registry: dict) -> str:

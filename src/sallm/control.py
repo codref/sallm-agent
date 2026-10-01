@@ -156,6 +156,7 @@ class Controller:
         active_skill: str,
         skill_descriptions: str,
         demos: str = "",
+        attachment_note: str = "",
     ) -> tuple[ControlDecision, dict]:
         prompt = (
             f"{self.instruction}\n"
@@ -166,6 +167,9 @@ class Controller:
         if demos:
             prompt += f"\nExamples:\n{demos}\n"
         prompt += f"\nUser message:\n{user_text}\n"
+        note = (attachment_note or "").strip()
+        if note:
+            prompt += f"\n{note}\n"
         result = complete(
             model=self.profile.model,
             messages=[user(prompt)],

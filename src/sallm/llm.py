@@ -5,6 +5,7 @@ import time
 
 from litellm import completion
 
+from .attachments import messages_have_images
 from .messages import DEFAULT_API_BASE, DEFAULT_MODEL
 from .models import coerce_think, think_on
 
@@ -93,7 +94,9 @@ def complete(model=None, messages=None, api_base=None, **kwargs):
     api_base = api_base or DEFAULT_API_BASE
     messages = messages or []
 
-    if "think" in kwargs:
+    # Ollama /api/generate cannot attach a picture to one turn. /api/chat can.
+    # Other providers already accept OpenAI image_url parts unchanged.
+    if messages_have_images(messages) or "think" in kwargs:
         model = _ollama_chat_model(model)
     kwargs = prepare_completion_kwargs(model, kwargs)
 

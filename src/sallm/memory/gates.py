@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 # Kinds that always index (extractor output, app ingest, etc.).
-_ALWAYS = frozenset({"fact", "derived", "ingest"})
+_ALWAYS = frozenset({"fact", "derived", "ingest", "image"})
 
 
 @runtime_checkable

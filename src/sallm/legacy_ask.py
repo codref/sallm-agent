@@ -7,6 +7,7 @@ import time
 from sallm import metrics as metrics_mod
 from sallm.llm import complete
 from sallm.messages import assistant, user
+from sallm.receipt import hydrate_llm_messages
 from sallm.tools import ToolResult, format_observations, prepare_commands, run_many
 
 
@@ -46,8 +47,11 @@ def _prepare_and_run(agent, content, tr):
         prepared.cleanup()
 
 
-def ask_legacy(agent, user_text: str):
-    agent.messages.append(user(user_text))
+def ask_legacy(agent, user_text: str, images=None):
+    message = user(user_text)
+    if images:
+        message["attachments"] = list(images)
+    agent.messages.append(message)
     steps = []
     turn_metrics = metrics_mod.empty_usage()
     acted = False
@@ -83,7 +87,11 @@ def ask_legacy(agent, user_text: str):
         )
 
     for _ in range(agent.max_steps):
-        prompt = agent._prompt_messages(agent.messages)
+        prompt = hydrate_llm_messages(
+            agent._prompt_messages(agent.messages),
+            prompt=agent.prompt,
+            profile=agent.profile,
+        )
         agent.last_prompt = prompt
         result = complete(
             model=agent.model,
@@ -171,7 +179,11 @@ def ask_legacy(agent, user_text: str):
         return _finish(content)
 
     if acted:
-        prompt = agent._prompt_messages(agent.messages)
+        prompt = hydrate_llm_messages(
+            agent._prompt_messages(agent.messages),
+            prompt=agent.prompt,
+            profile=agent.profile,
+        )
         agent.last_prompt = prompt
         result = complete(
             model=agent.model,

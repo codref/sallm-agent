@@ -29,6 +29,9 @@ How to run (from the repo root)
     uv run python examples/small_chat/agent.py --profile examples/small_chat/profile-gemma.json
     uv run python examples/small_chat/agent.py --script examples/small_chat/qa_script.txt
 
+    # Vision (local Gemma 4). Drop a diagram with @path on a line.
+    uv run python examples/small_chat/agent.py --profile examples/small_chat/profile-gemma4-e4b-vision.json --script examples/small_chat/qa_vision.txt
+
 Telemetry defaults (same as docs/tracing-tempo.md):
     --otlp http://localhost:4318
     --metrics-port 9464
@@ -185,6 +188,8 @@ def print_help() -> None:
     console.print(
         Panel(
             "[bold]/help[/]     this help\n"
+            "[bold]@path[/]      image as part of the question\n"
+            "[bold]@context:path[/]  image as background context\n"
             "[bold]/clear[/]    wipe this session (SQLite + vectors)\n"
             "[bold]/context[/]  last ContextReceipt (token budget)\n"
             "[bold]/memory[/]   chunk / derived-fact counts\n"

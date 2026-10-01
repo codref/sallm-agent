@@ -6,14 +6,20 @@
     "extractor": "",
     "ingest": "",
     "converse": "",
-    "rewriter": ""
+    "rewriter": "",
+    "vision": "",
+    "caption": "",
+    "vision_control": ""
   },
   "demonstrations": {
     "controller": "",
     "extractor": "",
     "ingest": "",
     "converse": "",
-    "rewriter": ""
+    "rewriter": "",
+    "vision": "",
+    "caption": "",
+    "vision_control": ""
   },
   "budgets": {},
   "metadata": {

@@ -13,7 +13,7 @@ from peewee import (
     TextField,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Bound per repository open(); models share this proxy.
 db = SqliteDatabase(None)
@@ -62,7 +62,7 @@ class MemoryChunk(BaseModel):
     session = ForeignKeyField(Session, backref="chunks", on_delete="CASCADE")
     source_message_id = IntegerField(null=True)
     text = TextField()
-    kind = CharField(default="raw")  # raw | derived | fact | ingest
+    kind = CharField(default="raw")  # raw | derived | fact | ingest | image
     indexed = BooleanField(default=False)
     created_at = FloatField()
 
@@ -75,6 +75,20 @@ class DerivedMemory(BaseModel):
     text = TextField()
     source_message_ids = TextField(default="")  # comma-separated ints
     created_at = FloatField()
+
+
+class Attachment(BaseModel):
+    """Image file copied beside the session database. Message text stays plain."""
+
+    id = CharField(primary_key=True)
+    session = ForeignKeyField(Session, backref="attachments", on_delete="CASCADE")
+    message_id = IntegerField()
+    role = CharField()  # question | context
+    mime = CharField()
+    sha256 = CharField()
+    filename = CharField()
+    path = TextField()
+    caption = TextField(default="")
 
 
 class PendingExtract(BaseModel):
@@ -94,5 +108,6 @@ ALL_TABLES = (
     SkillFrame,
     MemoryChunk,
     DerivedMemory,
+    Attachment,
     PendingExtract,
 )

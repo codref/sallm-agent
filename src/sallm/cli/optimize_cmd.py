@@ -87,7 +87,7 @@ def register(app: typer.Typer):
         task: str = typer.Option(
             "controller",
             "--task",
-            help="controller|extractor|ingest|converse|rewriter",
+            help="controller|extractor|ingest|converse|rewriter|vision|caption",
         ),
         tools: str = typer.Option(
             "echo,calc",
@@ -130,12 +130,14 @@ def register(app: typer.Typer):
         from sallm.optimization.artifacts import merge_budgets
         from sallm.optimization.budgets import search_budgets as run_budget_search
         from sallm.optimization.program import (
+            caption_messages,
             control_user_prompt,
             converse_messages,
             extract_user_prompt,
             materialize_got,
             tools_text_for,
         )
+        from sallm.prompt import CAPTION_INSTRUCTION, VISION_INSTRUCTION
 
         if budgets_only:
             search_budgets = True
@@ -180,6 +182,8 @@ def register(app: typer.Typer):
             "remember": INGEST_INSTRUCTION,
             "converse": "Answer the user clearly and briefly.",
             "rewriter": "Rewrite the user turn as a short retrieval query sentence.",
+            "vision": VISION_INSTRUCTION,
+            "caption": CAPTION_INSTRUCTION,
         }
         if task not in baselines and task != "all":
             raise typer.BadParameter(
@@ -226,7 +230,21 @@ def register(app: typer.Typer):
             complete_kw = complete_kw_for(budgets)
 
             def predict_fn(case, instruction, demos_text):
-                if profile_task == "converse":
+                if profile_task == "caption":
+                    messages = caption_messages(case, instruction)
+                    result = complete(
+                        model=student_model,
+                        messages=messages,
+                        api_base=api_base,
+                        **complete_kw,
+                    )
+                    return result.get("content") or "", {
+                        "total_tokens": (result.get("usage") or {}).get(
+                            "total_tokens", 0
+                        ),
+                        "elapsed_ms": result.get("elapsed_ms", 0),
+                    }
+                if profile_task in ("converse", "vision"):
                     messages = converse_messages(
                         case,
                         instruction,
@@ -438,7 +456,9 @@ def register(app: typer.Typer):
                     rounds=rounds,
                     seed=seed,
                     demos=demos,
-                    teacher_max_tokens=512 if profile_task == "converse" else 256,
+                    teacher_max_tokens=512
+                    if profile_task in ("converse", "vision")
+                    else 256,
                     on_event=on_event,
                 )
 

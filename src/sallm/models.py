@@ -62,6 +62,8 @@ class ModelProfile:
     # Recent transcript kept verbatim in the prompt view.
     recent_history_tokens: int = 1800
     retrieval_tokens: int = 800
+    # Packing estimate per image. Not sent to the provider.
+    image_tokens: int = 280
     control_max_tokens: int = 256
     extract_max_tokens: int = 384
     # Soft caps for optional compiled instructions / demos.

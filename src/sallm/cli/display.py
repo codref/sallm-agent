@@ -11,10 +11,27 @@ console = Console()
 _PROMPT_PREVIEW_CHARS = 400
 
 
+def _message_text(content) -> str:
+    if isinstance(content, list):
+        bits = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                bits.append(str(part.get("text") or ""))
+            elif part.get("type") == "image_url":
+                bits.append("[image]")
+        return " ".join(bit for bit in bits if bit)
+    return str(content or "")
+
+
 def print_help():
     console.print(
         Panel(
             "[bold]/help[/]  this help\n"
+            "[bold]@path[/]  drop an image into the question "
+            "(e.g. [cyan]@diagram.png what fails?[/])\n"
+            "[bold]@context:path[/]  drop an image as background context\n"
             "[bold]/clear[/]  reset conversation (+ dig/session state)\n"
             "[bold]/history[/]  show message roles + lengths\n"
             "[bold]/prompt[/]  show system prompt (+ last LLM view if any)\n"
@@ -115,7 +132,7 @@ def print_history(agent):
     table.add_column("chars", justify="right", width=8)
     table.add_column("preview")
     for i, msg in enumerate(agent.messages):
-        content = msg.get("content") or ""
+        content = _message_text(msg.get("content"))
         preview = content.replace("\n", " ")
         if len(preview) > 60:
             preview = preview[:57] + "..."
@@ -134,7 +151,7 @@ def print_last_prompt(agent, *, truncate=_PROMPT_PREVIEW_CHARS):
     table.add_column("chars", justify="right", width=8)
     table.add_column("content")
     for i, msg in enumerate(msgs):
-        content = msg.get("content") or ""
+        content = _message_text(msg.get("content"))
         shown = content
         if truncate > 0 and len(shown) > truncate:
             shown = shown[: truncate - 3] + "..."

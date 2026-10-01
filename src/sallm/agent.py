@@ -6,10 +6,19 @@ classic in-memory ReAct agent (existing tests keep working).
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import replace
 from pathlib import Path
 
 from . import metrics as metrics_mod
+from .attachments import (
+    attachment_row_id,
+    content_parts,
+    control_attachment_note,
+    copy_image,
+    memory_attachments,
+    parse_image_mentions,
+)
 from .control import Controller, MemoryExtractor, INGEST_INSTRUCTION
 from .extract_queue import ExtractScheduler, normalize_extract_mode, should_miss_flush
 from .legacy_ask import ask_legacy
@@ -26,6 +35,7 @@ from .memory import (
     resolve_retrieval_config,
     retrieve_hits,
 )
+from .llm import complete
 from .messages import DEFAULT_API_BASE, DEFAULT_MODEL, assistant, system, user
 from .models import (
     EmbeddingProfile,
@@ -34,7 +44,7 @@ from .models import (
     resolve_embedding_profile,
     resolve_model_profile,
 )
-from .prompt import CompiledProfile, Prompt
+from .prompt import CompiledProfile, Prompt, caption_instruction, vision_control_rules
 from .receipt import ContextReceipt
 from .skills import SkillRegistry
 from .state import SessionRepository
@@ -240,6 +250,9 @@ class Agent:
     def _load_transcript(self):
         if self.repo is None:
             return
+        grouped: dict[int, list[dict]] = {}
+        for att in self.repo.list_attachments(self.session_id):
+            grouped.setdefault(att.message_id, []).append(att.as_dict())
         loaded = []
         for m in self.repo.list_messages(self.session_id):
             # App-fed ingest stays in SQLite for grounding but must not fill
@@ -251,7 +264,11 @@ class Agent:
             elif m.role == "system":
                 loaded.append(system(m.content))
             else:
-                loaded.append(user(m.content))
+                msg = user(m.content)
+                found = grouped.get(m.id)
+                if found:
+                    msg["attachments"] = found
+                loaded.append(msg)
         self.messages = loaded
 
     def clear(self):
@@ -265,6 +282,9 @@ class Agent:
             self.repo.clear_session(self.session_id, default_skill="converse")
             if self.vector_store is not None:
                 self.vector_store.delete_session(self.session_id)
+            media = self.repo.path.parent / "media" / self.session_id
+            if media.is_dir():
+                shutil.rmtree(media, ignore_errors=True)
             if self.extracts is not None and self.extracts.metrics is not None:
                 self.extracts.metrics.observe_extract_queue(0)
         self._ensure_system()
@@ -483,32 +503,114 @@ class Agent:
             out["stopped"] = stopped
         return out
 
+    def _caption_attachments(self, attachments: list[dict], message_id: int):
+        """Caption each new image and index the caption as kind=image."""
+        instruction = caption_instruction(self.compiled_profile)
+        total = metrics_mod.empty_usage()
+        for att in attachments:
+            messages = [
+                {"role": "user", "content": content_parts(instruction, [att])}
+            ]
+            kwargs = self.profile.complete_kwargs(max_tokens=128)
+            kwargs["think"] = False
+            try:
+                result = complete(
+                    model=self.model,
+                    messages=messages,
+                    api_base=self.api_base,
+                    **kwargs,
+                )
+            except Exception:
+                continue
+            caption = (result.get("content") or "").strip()
+            usage = metrics_mod.from_llm_result(result)
+            total = metrics_mod.add_usage(total, usage)
+            if self.trace is not None:
+                self.trace.llm(
+                    model=self.model,
+                    metrics=usage,
+                    content=caption,
+                    name="caption",
+                    operation="caption",
+                )
+            if not caption:
+                continue
+            att["caption"] = caption
+            if self.repo is not None:
+                self.repo.set_caption(att["id"], caption)
+            if self.indexer is not None:
+                self.indexer.add_text(
+                    self.session_id,
+                    caption,
+                    chunks=[caption],
+                    source_message_id=message_id,
+                    kind="image",
+                    metadata={
+                        "modality": "image",
+                        "attachment_id": att["id"],
+                        "path": att["path"],
+                        "mime": att.get("mime") or "image/png",
+                    },
+                )
+        return total
+
     def ask(self, user_text: str):
+        text, mentions = parse_image_mentions(user_text)
         if self.repo is None:
-            return ask_legacy(self, user_text)
+            return ask_legacy(self, text, memory_attachments(mentions))
 
         turn_metrics = metrics_mod.empty_usage()
         steps = []
         self._last_miss_flush = False
         if self.trace is not None:
-            self.trace.turn_start(user_text, self.messages, model=self.model)
+            self.trace.turn_start(text, self.messages, model=self.model)
 
         stored = self.repo.append_message(
-            self.session_id, role="user", content=user_text, kind="chat"
+            self.session_id, role="user", content=text, kind="chat"
         )
-        self.messages.append(user(user_text))
+        attachments = []
+        for mention in mentions:
+            dest, digest, mime = copy_image(
+                self.repo.path.parent, self.session_id, mention
+            )
+            row = self.repo.add_attachment(
+                self.session_id,
+                attachment_id=attachment_row_id(
+                    self.session_id, stored.id, mention.role, digest
+                ),
+                message_id=stored.id,
+                role=mention.role,
+                mime=mime,
+                sha256=digest,
+                filename=mention.filename,
+                path=str(dest),
+            )
+            attachments.append(row.as_dict())
+        message = user(text)
+        if attachments:
+            message["attachments"] = attachments
+        self.messages.append(message)
+        if attachments:
+            caption_usage = self._caption_attachments(attachments, stored.id)
+            turn_metrics = metrics_mod.add_usage(turn_metrics, caption_usage)
 
         demos = ""
         if self.compiled_profile:
             demos = str(
                 self.compiled_profile.demonstrations.get("controller") or ""
             )
+        note = ""
+        if attachments:
+            note = control_attachment_note(
+                attachments, rules=vision_control_rules(self.compiled_profile)
+            )
         decision, ctrl_result = self.controller.decide(
-            user_text=user_text,
+            user_text=text,
             goal=self.repo.get_goal(self.session_id),
             active_skill=self.repo.active_skill(self.session_id),
             skill_descriptions=self.skills.descriptions(),
             demos=demos,
+            attachment_note=note,
         )
         ctrl_metrics = metrics_mod.from_llm_result(ctrl_result)
         turn_metrics = metrics_mod.add_usage(turn_metrics, ctrl_metrics)
@@ -535,8 +637,16 @@ class Agent:
 
         self._last_hits = []
         rq = decision.retrieval_query or ""
+        search_text = text
+        captions = [
+            (item.get("caption") or "").strip()
+            for item in attachments
+            if (item.get("caption") or "").strip()
+        ]
+        if captions:
+            search_text = text + "\n" + "\n".join(captions)
         try:
-            hits, hyde_result = self._retrieve(user_text, rq)
+            hits, hyde_result = self._retrieve(search_text, rq)
             self._last_hits = hits
             if hyde_result is not None:
                 hyde_metrics = metrics_mod.from_llm_result(hyde_result)
@@ -563,7 +673,7 @@ class Agent:
                 drained = self.extracts.drain(reason="miss")
                 turn_metrics = metrics_mod.add_usage(turn_metrics, drained)
                 try:
-                    hits, _ = self._retrieve(user_text, rq)
+                    hits, _ = self._retrieve(search_text, rq)
                     self._last_hits = hits
                 except Exception:
                     pass
@@ -581,8 +691,8 @@ class Agent:
         if self.indexer is not None:
             self.indexer.add_text(
                 self.session_id,
-                user_text,
-                chunks=self.chunker.chunk(user_text),
+                text,
+                chunks=self.chunker.chunk(text),
                 source_message_id=stored.id,
                 kind="raw",
             )
