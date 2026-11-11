@@ -69,9 +69,11 @@ class ModelProfile:
     # Soft caps for optional compiled instructions / demos.
     instruction_tokens: int = 400
     demo_tokens: int = 400
-    # Thinking and the visible reply share max_output_tokens (Ollama has no
-    # separate think cap). False disables; True enables; "low"/"medium"/
-    # "high"/"max" set effort on models that honor levels (gpt-oss, etc.).
+    # Visible-reply budgets (max_output_tokens / control_max_tokens / …) stay
+    # for content. When thinking is on, ``sallm.llm`` inflates the wire
+    # max_tokens so the reasoning share does not consume that reply budget.
+    # False disables; True enables; "low"/"medium"/"high"/"max" set effort
+    # on models that honor levels (OpenRouter, gpt-oss, etc.).
     think: bool | str | None = None
     # Optional extra system text, injected only when thinking is on.
     think_hint: str | None = None

@@ -107,7 +107,8 @@ def test_complete_refuses_thinking_without_reply():
                 max_tokens=512,
             )
         except ThinkingTruncated as exc:
-            assert "max_tokens=512" in str(exc)
+            # think=True → medium effort ≈ 50% share → wire cap doubles.
+            assert "max_tokens=1024" in str(exc)
         else:
             raise AssertionError("expected ThinkingTruncated")
 
@@ -156,3 +157,40 @@ def test_react_omits_think_by_default():
         agent.ask("hi")
         assert "think" not in mocked.call_args.kwargs
         assert mocked.call_args.kwargs.get("max_tokens") == ModelProfile().max_output_tokens
+
+
+def test_prepare_completion_kwargs_disables_reasoning_for_openai_hosts():
+    from sallm.llm import prepare_completion_kwargs
+
+    kwargs = prepare_completion_kwargs(
+        "openai/deepseek/deepseek-v4.1-flash",
+        {"think": False, "max_tokens": 64},
+    )
+    assert kwargs["extra_body"]["reasoning"] == {"effort": "none", "enabled": False}
+    assert kwargs["max_tokens"] == 64
+
+
+def test_prepare_completion_kwargs_inflates_max_tokens_for_effort():
+    from sallm.llm import prepare_completion_kwargs, wire_max_tokens
+
+    assert wire_max_tokens(256, "low") == 320
+    assert wire_max_tokens(256, "medium") == 512
+    kwargs = prepare_completion_kwargs(
+        "openai/deepseek/deepseek-v4.1-flash",
+        {"think": "low", "max_tokens": 256},
+    )
+    assert kwargs["extra_body"]["reasoning"] == {"effort": "low"}
+    assert kwargs["max_tokens"] == 320
+
+
+def test_prepare_completion_kwargs_clamps_glm_disable_to_low():
+    from sallm.llm import prepare_completion_kwargs, reasoning_mandatory
+
+    assert reasoning_mandatory("openai/z-ai/glm-5.3-flash:nitro")
+    kwargs = prepare_completion_kwargs(
+        "openai/z-ai/glm-5.3-flash",
+        {"think": False, "max_tokens": 256},
+    )
+    # Mandatory reasoning keeps a minimum effort and reserves reply budget.
+    assert kwargs["extra_body"]["reasoning"] == {"effort": "low"}
+    assert kwargs["max_tokens"] == 320

@@ -63,6 +63,7 @@ class StoredAttachment:
             "role": self.role,
             "path": self.path,
             "mime": self.mime,
+            "sha256": self.sha256,
             "filename": self.filename,
             "caption": self.caption,
         }
@@ -390,6 +391,33 @@ class SessionRepository:
             .order_by(Attachment.message_id, Attachment.filename)
         )
         return [self._stored_attachment(row) for row in q]
+
+    def find_caption_by_sha256(self, session_id: str, digest: str) -> str | None:
+        """Latest non-empty caption for these bytes in the session, if any."""
+        text = (digest or "").strip()
+        if not text:
+            return None
+        q = (
+            Attachment.select()
+            .where((Attachment.session == session_id) & (Attachment.sha256 == text))
+            .order_by(Attachment.message_id.desc())
+        )
+        for row in q:
+            caption = (row.caption or "").strip()
+            if caption:
+                return caption
+        return None
+
+    def captioned_digests(self, session_id: str) -> set[str]:
+        """SHA-256 digests in this session that already have a caption."""
+        q = Attachment.select(Attachment.sha256, Attachment.caption).where(
+            Attachment.session == session_id
+        )
+        return {
+            row.sha256
+            for row in q
+            if (row.sha256 or "").strip() and (row.caption or "").strip()
+        }
 
     def find_attachment_by_caption(
         self,

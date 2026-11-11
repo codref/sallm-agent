@@ -47,8 +47,8 @@ def parse_image_mentions(
 ) -> tuple[str, list[ImageMention]]:
     """Split ``@path`` / ``@context:path`` tokens out of a chat line.
 
-    The returned text has those tokens removed. A missing file or a non-image
-    suffix raises ``AttachmentError``.
+    The returned text has image tokens removed. A missing image file raises
+    ``AttachmentError``. A token whose suffix is not an image stays in the text.
     """
     root = base or Path.cwd()
     mentions: list[ImageMention] = []
@@ -66,10 +66,13 @@ def parse_image_mentions(
             path = (root / path).resolve()
         else:
             path = path.resolve()
+        # Host chat text contains @names that are not files. Only image
+        # suffixes are attachments; anything else stays in the line.
+        if path.suffix.lower() not in IMAGE_SUFFIXES:
+            pieces.append(match.group(0))
+            continue
         if not path.is_file():
             raise AttachmentError(f"image not found: {raw}")
-        if path.suffix.lower() not in IMAGE_SUFFIXES:
-            raise AttachmentError(f"not an image: {raw}")
         mentions.append(ImageMention(role=role, path=path, filename=path.name))
     pieces.append((line or "")[last:])
     text = " ".join("".join(pieces).split())

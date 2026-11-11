@@ -503,11 +503,34 @@ class Agent:
             out["stopped"] = stopped
         return out
 
-    def _caption_attachments(self, attachments: list[dict], message_id: int):
-        """Caption each new image and index the caption as kind=image."""
+    def captioned_digests(self) -> set[str]:
+        """SHA-256 digests that already have a caption in this session."""
+        if self.repo is None:
+            return set()
+        return self.repo.captioned_digests(self.session_id)
+
+    def _caption_attachments(
+        self,
+        attachments: list[dict],
+        message_id: int,
+        *,
+        force_caption: bool = False,
+    ):
+        """Caption each new image and index the caption as kind=image.
+
+        The same bytes in this session reuse the stored caption unless
+        ``force_caption`` is set.
+        """
         instruction = caption_instruction(self.compiled_profile)
         total = metrics_mod.empty_usage()
         for att in attachments:
+            digest = (att.get("sha256") or "").strip()
+            if not force_caption and digest and self.repo is not None:
+                prior = self.repo.find_caption_by_sha256(self.session_id, digest)
+                if prior:
+                    att["caption"] = prior
+                    self.repo.set_caption(att["id"], prior)
+                    continue
             messages = [
                 {"role": "user", "content": content_parts(instruction, [att])}
             ]
@@ -550,12 +573,21 @@ class Agent:
                         "attachment_id": att["id"],
                         "path": att["path"],
                         "mime": att.get("mime") or "image/png",
+                        "filename": att.get("filename") or "",
                     },
                 )
         return total
 
-    def ask(self, user_text: str):
+    def ask(self, user_text: str, images=None, *, force_caption: bool = False):
+        """Run one turn.
+
+        ``images`` are ``ImageMention`` values supplied by a host (question or
+        context). ``@path`` tokens in ``user_text`` are still parsed for the
+        CLI. ``force_caption`` recaptions bytes this session has already seen.
+        """
         text, mentions = parse_image_mentions(user_text)
+        if images:
+            mentions = [*mentions, *list(images)]
         if self.repo is None:
             return ask_legacy(self, text, memory_attachments(mentions))
 
@@ -591,7 +623,9 @@ class Agent:
             message["attachments"] = attachments
         self.messages.append(message)
         if attachments:
-            caption_usage = self._caption_attachments(attachments, stored.id)
+            caption_usage = self._caption_attachments(
+                attachments, stored.id, force_caption=force_caption
+            )
             turn_metrics = metrics_mod.add_usage(turn_metrics, caption_usage)
 
         demos = ""

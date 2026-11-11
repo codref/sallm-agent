@@ -142,6 +142,7 @@ class MemoryIndexer:
                         "attachment_id": att.id,
                         "path": att.path,
                         "mime": att.mime,
+                        "filename": att.filename,
                     }
                 )
         return meta

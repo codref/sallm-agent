@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import struct
 import zlib
 from pathlib import Path
@@ -69,8 +70,10 @@ def test_parse_missing_and_not_image(tmp_path):
         parse_image_mentions("@missing.png", base=tmp_path)
     plain = tmp_path / "notes.txt"
     plain.write_text("hello", encoding="utf-8")
-    with pytest.raises(AttachmentError, match="not an image"):
-        parse_image_mentions(f"@{plain.name}", base=tmp_path)
+    text, mentions = parse_image_mentions(f"hi @{plain.name} and @Davide", base=tmp_path)
+    assert mentions == []
+    assert f"@{plain.name}" in text
+    assert "@Davide" in text
 
 
 def test_compile_places_question_and_context_images(tmp_path):
@@ -213,6 +216,120 @@ def test_retrieved_image_is_context(tmp_path):
     assert "red block" in context["content"][0]["text"]
     question = messages[-1]
     assert question["content"] == "what was the diagram?"
+
+
+def _image_url(message) -> str:
+    content = message.get("content")
+    if not isinstance(content, list):
+        return ""
+    for part in content:
+        if isinstance(part, dict) and part.get("type") == "image_url":
+            return str((part.get("image_url") or {}).get("url") or "")
+    return ""
+
+
+def test_current_context_bytes_win_over_same_filename(tmp_path):
+    from sallm.memory.types import VectorHit
+
+    old = _png(tmp_path / "old.png", left=(1, 0, 0), right=(1, 0, 0))
+    new = _png(tmp_path / "new.png", left=(0, 0, 9), right=(0, 0, 9))
+    hit = VectorHit(
+        id="h1",
+        text="boxes and arrows",
+        score=0.9,
+        source_id="3",
+        metadata={
+            "kind": "image",
+            "modality": "image",
+            "attachment_id": "att-old",
+            "path": str(old),
+            "mime": "image/png",
+            "filename": "diagram.excalidraw.png",
+        },
+    )
+    profile = ModelProfile(prompt_budget=4000, retrieval_tokens=800, image_tokens=40)
+    prompt = Prompt(tools_text="(none)")
+    messages, _receipt = compile_prompt_messages(
+        profile=profile,
+        prompt=prompt,
+        recent_messages=[
+            {
+                "role": "user",
+                "content": "what changed on the board?",
+                "attachments": [
+                    {
+                        "id": "att-new",
+                        "role": "context",
+                        "path": str(new),
+                        "mime": "image/png",
+                        "filename": "diagram.excalidraw.png",
+                    }
+                ],
+            }
+        ],
+        hits=[hit],
+    )
+    context = next(
+        m
+        for m in messages
+        if isinstance(m.get("content"), list)
+        and "[Retrieved memory]" in m["content"][0]["text"]
+    )
+    url = _image_url(context)
+    assert base64.standard_b64encode(new.read_bytes()).decode("ascii") in url
+    assert base64.standard_b64encode(old.read_bytes()).decode("ascii") not in url
+
+
+def test_retrieved_image_wins_when_filename_differs(tmp_path):
+    from sallm.memory.types import VectorHit
+
+    old = _png(tmp_path / "old.png", left=(1, 0, 0), right=(1, 0, 0))
+    photo = _png(tmp_path / "photo.png", left=(0, 0, 9), right=(0, 0, 9))
+    hit = VectorHit(
+        id="h1",
+        text="boxes and arrows",
+        score=0.9,
+        source_id="3",
+        metadata={
+            "kind": "image",
+            "modality": "image",
+            "attachment_id": "att-old",
+            "path": str(old),
+            "mime": "image/png",
+            "filename": "diagram.excalidraw.png",
+        },
+    )
+    profile = ModelProfile(prompt_budget=4000, retrieval_tokens=800, image_tokens=40)
+    prompt = Prompt(tools_text="(none)")
+    messages, _receipt = compile_prompt_messages(
+        profile=profile,
+        prompt=prompt,
+        recent_messages=[
+            {
+                "role": "user",
+                "content": "and this photo?",
+                "attachments": [
+                    {
+                        "id": "att-photo",
+                        "role": "context",
+                        "path": str(photo),
+                        "mime": "image/png",
+                        "filename": "photo.png",
+                    }
+                ],
+            }
+        ],
+        hits=[hit],
+    )
+    context = next(
+        m
+        for m in messages
+        if isinstance(m.get("content"), list)
+        and "[Retrieved memory]" in m["content"][0]["text"]
+    )
+    url = _image_url(context)
+    assert base64.standard_b64encode(old.read_bytes()).decode("ascii") in url
+    assert base64.standard_b64encode(photo.read_bytes()).decode("ascii") not in url
 
 
 def test_vision_instruction_absent_without_images():
@@ -399,3 +516,58 @@ def test_complete_rewrites_ollama_only_for_images(monkeypatch):
         messages=[{"role": "user", "content": "hello"}],
     )
     assert seen["model"] == "ollama/gemma4:e4b-it-qat"
+
+
+def _message_text(messages) -> str:
+    bits = []
+    for message in messages or []:
+        body = message.get("content")
+        if isinstance(body, str):
+            bits.append(body)
+        elif isinstance(body, list):
+            for part in body:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    bits.append(part.get("text") or "")
+    return "\n".join(bits)
+
+
+def test_ask_images_reuse_caption(tmp_path, monkeypatch):
+    from sallm import Agent
+    from sallm.attachments import ImageMention
+    from tests.test_memory_vector import FakeEmbedder, InMemoryVectorStore
+
+    diagram = _png(tmp_path / "diagram.png")
+    caption_calls = {"n": 0}
+
+    def fake_complete(**kwargs):
+        text = _message_text(kwargs.get("messages"))
+        if "Describe this image" in text:
+            caption_calls["n"] += 1
+            return {"content": "a red and blue diagram"}
+        return {"content": "done"}
+
+    monkeypatch.setattr("sallm.agent.complete", fake_complete)
+    monkeypatch.setattr("sallm.control.complete", fake_complete)
+    monkeypatch.setattr("sallm.turn.complete", fake_complete)
+
+    agent = Agent(
+        model="openai/gpt-4o",
+        api_base="http://localhost:9",
+        state_path=tmp_path / "state.db",
+        vector_store=InMemoryVectorStore(8),
+        embedder=FakeEmbedder(),
+        session_id="s",
+        max_steps=1,
+        extract_mode="queue",
+    )
+    try:
+        mention = ImageMention(role="context", path=diagram, filename="diagram.png")
+        agent.ask("what is in @Davide's note?", images=[mention])
+        assert caption_calls["n"] == 1
+        assert agent.captioned_digests()
+        agent.ask("same page", images=[mention])
+        assert caption_calls["n"] == 1
+        agent.ask("read it again", images=[mention], force_caption=True)
+        assert caption_calls["n"] == 2
+    finally:
+        agent.repo.close()

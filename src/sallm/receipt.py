@@ -257,13 +257,40 @@ def _hit_image(hit: VectorHit) -> dict | None:
         "role": "context",
         "path": path,
         "mime": meta.get("mime") or "image/png",
-        "filename": Path(path).name,
+        "filename": (
+            str(meta.get("filename") or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+            or Path(path).name
+        ),
         "caption": hit.text,
     }
 
 
+def _image_filename(att: dict) -> str:
+    name = str(att.get("filename") or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if name:
+        return name
+    path = str(att.get("path") or "")
+    return Path(path).name if path else ""
+
+
+def _current_turn_contexts(messages: list[dict]) -> list[dict]:
+    """Context images on the newest user message. Older turns are left alone."""
+    for msg in reversed(messages):
+        if (msg.get("role") or "user") != "user":
+            continue
+        content = msg.get("content") or ""
+        if isinstance(content, str) and content.startswith("[Retrieved memory]"):
+            continue
+        return _context_attachments(msg)
+    return []
+
+
 def choose_images(messages: list[dict], hits: list[VectorHit]):
-    """Newest question image, one context image, and filenames left out."""
+    """Newest question image, one context image, and filenames left out.
+
+    A context image attached on this turn wins over a retrieved image with
+    the same filename, so a redrawn diagram replaces its previous pixels.
+    """
     question = None
     context_from_msg = None
     dropped: list[str] = []
@@ -286,7 +313,18 @@ def choose_images(messages: list[dict], hits: list[VectorHit]):
             retrieved = att
         else:
             dropped.append(att.get("filename") or "image")
+    fresh = None
     if retrieved is not None:
+        retrieved_name = _image_filename(retrieved)
+        for att in _current_turn_contexts(messages):
+            name = _image_filename(att)
+            if name and name == retrieved_name:
+                fresh = att
+    if fresh is not None:
+        context = fresh
+        name = _image_filename(fresh)
+        dropped = [item for item in dropped if item != name]
+    elif retrieved is not None:
         context = retrieved
         if context_from_msg is not None and context_from_msg[1].get("id") != retrieved.get(
             "id"

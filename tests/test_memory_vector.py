@@ -154,6 +154,51 @@ def test_lance_dimension_error(tmp_path):
         )
 
 
+def test_lance_migrates_struct_metadata(tmp_path):
+    """Older tables stored metadata as a struct and reject new image keys."""
+    lancedb = pytest.importorskip("lancedb")
+    path = tmp_path / "lance-old"
+    path.mkdir()
+    db = lancedb.connect(str(path))
+    db.create_table(
+        "chunks",
+        data=[
+            {
+                "id": "old",
+                "text": "earlier note",
+                "vector": [0.1] * 8,
+                "session_id": "s",
+                "source_id": "1",
+                "metadata": {"kind": "raw"},
+            }
+        ],
+    )
+    store = LanceVectorStore(path, dimensions=8)
+    store.upsert(
+        [
+            VectorRecord(
+                id="img",
+                text="a door diagram",
+                vector=[0.2] * 8,
+                session_id="s",
+                source_id="2",
+                metadata={
+                    "kind": "image",
+                    "modality": "image",
+                    "attachment_id": "att-1",
+                    "path": "/tmp/door.png",
+                    "mime": "image/png",
+                },
+            )
+        ]
+    )
+    hits = store.search(VectorQuery(vector=[0.2] * 8, k=4, session_id="s"))
+    by_id = {hit.id: hit for hit in hits}
+    assert by_id["img"].metadata["attachment_id"] == "att-1"
+    assert by_id["old"].metadata["kind"] == "raw"
+    store.close()
+
+
 def test_lance_hybrid_search(tmp_path):
     """Hybrid BM25+dense should surface an exact-token document."""
     pytest.importorskip("lancedb")

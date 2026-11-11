@@ -2,11 +2,29 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from .types import VectorHit, VectorQuery, VectorRecord
 
 TABLE_NAME = "chunks"
+
+
+def _dump_metadata(meta: dict | None) -> str:
+    """JSON so new keys do not change the Lance column schema."""
+    return json.dumps(dict(meta or {}), ensure_ascii=False, sort_keys=True)
+
+
+def _load_metadata(value) -> dict:
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
 
 
 class LanceVectorStore:
@@ -80,11 +98,16 @@ class LanceVectorStore:
                     "vector": list(r.vector),
                     "session_id": r.session_id or "",
                     "source_id": r.source_id or "",
-                    "metadata": dict(r.metadata or {}),
+                    "metadata": _dump_metadata(r.metadata),
                 }
             )
         db = self._connect()
         table = self._table()
+        if table is None:
+            db.create_table(TABLE_NAME, data=rows)
+            self._fts_ready = False
+            return
+        table = self._ensure_json_metadata(table)
         if table is None:
             db.create_table(TABLE_NAME, data=rows)
             self._fts_ready = False
@@ -175,7 +198,7 @@ class LanceVectorStore:
                     score=self._hit_score(row),
                     session_id=row.get("session_id") or "",
                     source_id=row.get("source_id") or None,
-                    metadata=dict(row.get("metadata") or {}),
+                    metadata=_load_metadata(row.get("metadata")),
                 )
             )
             if len(hits) >= query.k:
@@ -198,6 +221,39 @@ class LanceVectorStore:
             if keep:
                 db.create_table(TABLE_NAME, data=keep)
             self._fts_ready = False
+
+    def _ensure_json_metadata(self, table):
+        """Rewrite a struct ``metadata`` column into a JSON string.
+
+        Tables created before image captions only have the keys of the first
+        chunk. Adding ``attachment_id`` then fails with a schema error.
+        """
+        import pyarrow as pa
+
+        field = table.schema.field("metadata")
+        if pa.types.is_string(field.type) or pa.types.is_large_string(field.type):
+            return table
+        converted = []
+        for raw in table.to_arrow().to_pylist():
+            vector = raw.get("vector")
+            if hasattr(vector, "tolist"):
+                vector = vector.tolist()
+            converted.append(
+                {
+                    "id": raw.get("id") or "",
+                    "text": raw.get("text") or "",
+                    "vector": list(vector or []),
+                    "session_id": raw.get("session_id") or "",
+                    "source_id": raw.get("source_id") or "",
+                    "metadata": _dump_metadata(_load_metadata(raw.get("metadata"))),
+                }
+            )
+        db = self._connect()
+        db.drop_table(TABLE_NAME)
+        self._fts_ready = False
+        if not converted:
+            return None
+        return db.create_table(TABLE_NAME, data=converted)
 
     def close(self) -> None:
         self._db = None
