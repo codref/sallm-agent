@@ -6,19 +6,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .models import (
-    ALL_TABLES,
-    SCHEMA_VERSION,
-    Attachment,
-    DerivedMemory,
-    MemoryChunk,
-    Message,
-    PendingExtract,
-    SchemaMeta,
-    Session,
-    SkillFrame,
-    db,
-)
+from peewee import SqliteDatabase
+
+from .models import SCHEMA_VERSION, build_models
 
 
 @dataclass(frozen=True)
@@ -83,27 +73,30 @@ class SessionRepository:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        db.init(str(self.path), pragmas={"foreign_keys": 1, "journal_mode": "wal"})
-        db.connect(reuse_if_open=True)
-        db.create_tables(ALL_TABLES)
+        # Own database and model classes: several repositories (state files) can be open in one
+        # process, on any threads, without one rebinding the tables of another.
+        self.db = SqliteDatabase(str(self.path), pragmas={"foreign_keys": 1, "journal_mode": "wal"})
+        self.m = build_models(self.db)
+        self.db.connect(reuse_if_open=True)
+        self.db.create_tables(self.m.ALL_TABLES)
         self._ensure_schema()
 
     def close(self):
-        if not db.is_closed():
-            db.close()
+        if not self.db.is_closed():
+            self.db.close()
 
     def _ensure_schema(self):
-        row = SchemaMeta.get_or_none(SchemaMeta.key == "version")
+        row = self.m.SchemaMeta.get_or_none(self.m.SchemaMeta.key == "version")
         if row is None:
-            SchemaMeta.create(key="version", value=str(SCHEMA_VERSION))
+            self.m.SchemaMeta.create(key="version", value=str(SCHEMA_VERSION))
             return
         ver = int(row.value)
         if ver == SCHEMA_VERSION:
             return
         if 1 <= ver < SCHEMA_VERSION:
             # New tables are created above; bump the marker.
-            SchemaMeta.update(value=str(SCHEMA_VERSION)).where(
-                SchemaMeta.key == "version"
+            self.m.SchemaMeta.update(value=str(SCHEMA_VERSION)).where(
+                self.m.SchemaMeta.key == "version"
             ).execute()
             return
         raise RuntimeError(
@@ -112,8 +105,8 @@ class SessionRepository:
 
     def ensure_session(self, session_id: str, *, default_skill: str = "converse"):
         now = time.time()
-        with db.atomic():
-            session, created = Session.get_or_create(
+        with self.db.atomic():
+            session, created = self.m.Session.get_or_create(
                 id=session_id,
                 defaults={
                     "goal": "",
@@ -122,7 +115,7 @@ class SessionRepository:
                 },
             )
             if created:
-                SkillFrame.create(
+                self.m.SkillFrame.create(
                     session=session,
                     skill=default_skill,
                     depth=0,
@@ -132,23 +125,23 @@ class SessionRepository:
             return session
 
     def touch(self, session_id: str):
-        Session.update(updated_at=time.time()).where(Session.id == session_id).execute()
+        self.m.Session.update(updated_at=time.time()).where(self.m.Session.id == session_id).execute()
 
     def get_goal(self, session_id: str) -> str:
-        s = Session.get_or_none(Session.id == session_id)
+        s = self.m.Session.get_or_none(self.m.Session.id == session_id)
         return (s.goal if s else "") or ""
 
     def set_goal(self, session_id: str, goal: str):
-        with db.atomic():
-            Session.update(goal=goal or "", updated_at=time.time()).where(
-                Session.id == session_id
+        with self.db.atomic():
+            self.m.Session.update(goal=goal or "", updated_at=time.time()).where(
+                self.m.Session.id == session_id
             ).execute()
 
     def list_messages(self, session_id: str) -> list[StoredMessage]:
         q = (
-            Message.select()
-            .where(Message.session == session_id)
-            .order_by(Message.seq)
+            self.m.Message.select()
+            .where(self.m.Message.session == session_id)
+            .order_by(self.m.Message.seq)
         )
         return [
             StoredMessage(
@@ -165,15 +158,15 @@ class SessionRepository:
         content: str,
         kind: str = "chat",
     ) -> StoredMessage:
-        with db.atomic():
+        with self.db.atomic():
             last = (
-                Message.select(Message.seq)
-                .where(Message.session == session_id)
-                .order_by(Message.seq.desc())
+                self.m.Message.select(self.m.Message.seq)
+                .where(self.m.Message.session == session_id)
+                .order_by(self.m.Message.seq.desc())
                 .first()
             )
             seq = (last.seq + 1) if last else 0
-            m = Message.create(
+            m = self.m.Message.create(
                 session=session_id,
                 role=role,
                 content=content or "",
@@ -188,9 +181,9 @@ class SessionRepository:
 
     def stack(self, session_id: str) -> list[StoredFrame]:
         q = (
-            SkillFrame.select()
-            .where(SkillFrame.session == session_id)
-            .order_by(SkillFrame.depth)
+            self.m.SkillFrame.select()
+            .where(self.m.SkillFrame.session == session_id)
+            .order_by(self.m.SkillFrame.depth)
         )
         return [StoredFrame(skill=f.skill, depth=f.depth, note=f.note) for f in q]
 
@@ -199,10 +192,10 @@ class SessionRepository:
         return frames[-1].skill if frames else "converse"
 
     def push_skill(self, session_id: str, skill: str, note: str = ""):
-        with db.atomic():
+        with self.db.atomic():
             frames = self.stack(session_id)
             depth = frames[-1].depth + 1 if frames else 0
-            SkillFrame.create(
+            self.m.SkillFrame.create(
                 session=session_id,
                 skill=skill,
                 depth=depth,
@@ -213,11 +206,11 @@ class SessionRepository:
 
     def pop_skill(self, session_id: str) -> str | None:
         """Pop top frame if depth > 0; never remove the root converse frame."""
-        with db.atomic():
+        with self.db.atomic():
             frames = list(
-                SkillFrame.select()
-                .where(SkillFrame.session == session_id)
-                .order_by(SkillFrame.depth.desc())
+                self.m.SkillFrame.select()
+                .where(self.m.SkillFrame.session == session_id)
+                .order_by(self.m.SkillFrame.depth.desc())
             )
             if not frames or frames[0].depth == 0:
                 return None
@@ -227,11 +220,11 @@ class SessionRepository:
             return skill
 
     def replace_skill(self, session_id: str, skill: str, note: str = ""):
-        with db.atomic():
+        with self.db.atomic():
             top = (
-                SkillFrame.select()
-                .where(SkillFrame.session == session_id)
-                .order_by(SkillFrame.depth.desc())
+                self.m.SkillFrame.select()
+                .where(self.m.SkillFrame.session == session_id)
+                .order_by(self.m.SkillFrame.depth.desc())
                 .first()
             )
             if top is None:
@@ -253,8 +246,8 @@ class SessionRepository:
     ) -> StoredChunk | None:
         if not (text or "").strip():
             return None
-        with db.atomic():
-            existing = MemoryChunk.get_or_none(MemoryChunk.id == chunk_id)
+        with self.db.atomic():
+            existing = self.m.MemoryChunk.get_or_none(self.m.MemoryChunk.id == chunk_id)
             if existing is not None:
                 return StoredChunk(
                     id=existing.id,
@@ -263,7 +256,7 @@ class SessionRepository:
                     kind=existing.kind,
                     indexed=bool(existing.indexed),
                 )
-            row = MemoryChunk.create(
+            row = self.m.MemoryChunk.create(
                 id=chunk_id,
                 session=session_id,
                 source_message_id=source_message_id,
@@ -281,11 +274,11 @@ class SessionRepository:
             )
 
     def mark_indexed(self, chunk_id: str):
-        MemoryChunk.update(indexed=True).where(MemoryChunk.id == chunk_id).execute()
+        self.m.MemoryChunk.update(indexed=True).where(self.m.MemoryChunk.id == chunk_id).execute()
 
     def unindexed_chunks(self, session_id: str) -> list[StoredChunk]:
-        q = MemoryChunk.select().where(
-            (MemoryChunk.session == session_id) & (MemoryChunk.indexed == False)  # noqa: E712
+        q = self.m.MemoryChunk.select().where(
+            (self.m.MemoryChunk.session == session_id) & (self.m.MemoryChunk.indexed == False)  # noqa: E712
         )
         return [
             StoredChunk(
@@ -299,7 +292,7 @@ class SessionRepository:
         ]
 
     def list_chunks(self, session_id: str) -> list[StoredChunk]:
-        q = MemoryChunk.select().where(MemoryChunk.session == session_id)
+        q = self.m.MemoryChunk.select().where(self.m.MemoryChunk.session == session_id)
         return [
             StoredChunk(
                 id=c.id,
@@ -320,7 +313,7 @@ class SessionRepository:
         if not (text or "").strip():
             return
         ids = ",".join(str(i) for i in source_message_ids)
-        DerivedMemory.create(
+        self.m.DerivedMemory.create(
             session=session_id,
             text=text.strip(),
             source_message_ids=ids,
@@ -329,7 +322,7 @@ class SessionRepository:
 
     def list_derived(self, session_id: str) -> list[tuple[str, list[int]]]:
         out = []
-        for row in DerivedMemory.select().where(DerivedMemory.session == session_id):
+        for row in self.m.DerivedMemory.select().where(self.m.DerivedMemory.session == session_id):
             ids = []
             for part in (row.source_message_ids or "").split(","):
                 part = part.strip()
@@ -362,11 +355,11 @@ class SessionRepository:
         filename: str,
         path: str,
     ) -> StoredAttachment:
-        with db.atomic():
-            existing = Attachment.get_or_none(Attachment.id == attachment_id)
+        with self.db.atomic():
+            existing = self.m.Attachment.get_or_none(self.m.Attachment.id == attachment_id)
             if existing is not None:
                 return self._stored_attachment(existing)
-            row = Attachment.create(
+            row = self.m.Attachment.create(
                 id=attachment_id,
                 session=session_id,
                 message_id=int(message_id),
@@ -380,15 +373,15 @@ class SessionRepository:
             return self._stored_attachment(row)
 
     def set_caption(self, attachment_id: str, caption: str):
-        Attachment.update(caption=caption or "").where(
-            Attachment.id == attachment_id
+        self.m.Attachment.update(caption=caption or "").where(
+            self.m.Attachment.id == attachment_id
         ).execute()
 
     def list_attachments(self, session_id: str) -> list[StoredAttachment]:
         q = (
-            Attachment.select()
-            .where(Attachment.session == session_id)
-            .order_by(Attachment.message_id, Attachment.filename)
+            self.m.Attachment.select()
+            .where(self.m.Attachment.session == session_id)
+            .order_by(self.m.Attachment.message_id, self.m.Attachment.filename)
         )
         return [self._stored_attachment(row) for row in q]
 
@@ -398,9 +391,9 @@ class SessionRepository:
         if not text:
             return None
         q = (
-            Attachment.select()
-            .where((Attachment.session == session_id) & (Attachment.sha256 == text))
-            .order_by(Attachment.message_id.desc())
+            self.m.Attachment.select()
+            .where((self.m.Attachment.session == session_id) & (self.m.Attachment.sha256 == text))
+            .order_by(self.m.Attachment.message_id.desc())
         )
         for row in q:
             caption = (row.caption or "").strip()
@@ -410,8 +403,8 @@ class SessionRepository:
 
     def captioned_digests(self, session_id: str) -> set[str]:
         """SHA-256 digests in this session that already have a caption."""
-        q = Attachment.select(Attachment.sha256, Attachment.caption).where(
-            Attachment.session == session_id
+        q = self.m.Attachment.select(self.m.Attachment.sha256, self.m.Attachment.caption).where(
+            self.m.Attachment.session == session_id
         )
         return {
             row.sha256
@@ -429,16 +422,16 @@ class SessionRepository:
         text = (caption or "").strip()
         if not text:
             return None
-        q = Attachment.select().where(Attachment.session == session_id)
+        q = self.m.Attachment.select().where(self.m.Attachment.session == session_id)
         if message_id is not None:
-            q = q.where(Attachment.message_id == int(message_id))
+            q = q.where(self.m.Attachment.message_id == int(message_id))
         for row in q:
             if (row.caption or "").strip() == text:
                 return self._stored_attachment(row)
         return None
 
     def enqueue_extract(self, session_id: str, anchor_message_id: int) -> PendingExtractJob:
-        row = PendingExtract.create(
+        row = self.m.PendingExtract.create(
             session=session_id,
             anchor_message_id=int(anchor_message_id),
             status="pending",
@@ -453,12 +446,12 @@ class SessionRepository:
 
     def list_pending_extracts(self, session_id: str) -> list[PendingExtractJob]:
         q = (
-            PendingExtract.select()
+            self.m.PendingExtract.select()
             .where(
-                (PendingExtract.session == session_id)
-                & (PendingExtract.status == "pending")
+                (self.m.PendingExtract.session == session_id)
+                & (self.m.PendingExtract.status == "pending")
             )
-            .order_by(PendingExtract.id)
+            .order_by(self.m.PendingExtract.id)
         )
         return [
             PendingExtractJob(
@@ -472,24 +465,24 @@ class SessionRepository:
 
     def count_pending_extracts(self, session_id: str) -> int:
         return (
-            PendingExtract.select()
+            self.m.PendingExtract.select()
             .where(
-                (PendingExtract.session == session_id)
-                & (PendingExtract.status == "pending")
+                (self.m.PendingExtract.session == session_id)
+                & (self.m.PendingExtract.status == "pending")
             )
             .count()
         )
 
     def mark_extract_done(self, job_id: int):
-        PendingExtract.update(status="done").where(PendingExtract.id == job_id).execute()
+        self.m.PendingExtract.update(status="done").where(self.m.PendingExtract.id == job_id).execute()
 
     def mark_extract_failed(self, job_id: int):
-        PendingExtract.update(status="failed").where(
-            PendingExtract.id == job_id
+        self.m.PendingExtract.update(status="failed").where(
+            self.m.PendingExtract.id == job_id
         ).execute()
 
     def clear_session(self, session_id: str, *, default_skill: str = "converse"):
         """Delete all rows for a session, then recreate an empty root frame."""
-        with db.atomic():
-            Session.delete().where(Session.id == session_id).execute()
+        with self.db.atomic():
+            self.m.Session.delete().where(self.m.Session.id == session_id).execute()
         self.ensure_session(session_id, default_skill=default_skill)

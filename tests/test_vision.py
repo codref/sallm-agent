@@ -360,15 +360,15 @@ def test_vision_instruction_override():
 
 def test_schema_migrate_2_to_3(tmp_path):
     from sallm.state import SessionRepository
-    from sallm.state.models import SCHEMA_VERSION, Attachment, SchemaMeta, db
+    from sallm.state.models import SCHEMA_VERSION
 
     path = tmp_path / "old.db"
     repo = SessionRepository(path)
-    SchemaMeta.update(value="2").where(SchemaMeta.key == "version").execute()
+    repo.m.SchemaMeta.update(value="2").where(repo.m.SchemaMeta.key == "version").execute()
     repo.close()
-    db.close()
 
     repo2 = SessionRepository(path)
+    SchemaMeta, Attachment = repo2.m.SchemaMeta, repo2.m.Attachment
     assert SchemaMeta.get(SchemaMeta.key == "version").value == str(SCHEMA_VERSION)
     repo2.ensure_session("s")
     stored = repo2.append_message("s", role="user", content="see", kind="chat")

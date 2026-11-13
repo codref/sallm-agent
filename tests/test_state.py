@@ -67,3 +67,39 @@ def test_chunks_and_derived(tmp_path):
     repo.add_derived("s1", "code=42", [m.id])
     assert repo.list_derived("s1")[0][0] == "code=42"
     repo.close()
+
+
+def test_repositories_are_independent(tmp_path):
+    """Two state files open in one process (one per chat agent) must not share a binding."""
+    import threading
+
+    from sallm.state import SessionRepository
+
+    a = SessionRepository(tmp_path / "a" / "state.db")
+    a.ensure_session("chat-a")
+    b = SessionRepository(tmp_path / "b" / "state.db")  # opened later: used to take over `a`
+    b.ensure_session("chat-b")
+
+    a.append_message("chat-a", role="user", content="first in a")
+    b.append_message("chat-b", role="user", content="first in b")
+    errors = []
+
+    def write(repo, sid):
+        try:
+            for i in range(20):
+                repo.append_message(sid, role="user", content=f"{sid} {i}")
+        except Exception as exc:  # pragma: no cover - reported below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write, args=(a, "chat-a")),
+               threading.Thread(target=write, args=(b, "chat-b"))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+    assert [m.content for m in a.list_messages("chat-a")][:1] == ["first in a"]
+    assert len(a.list_messages("chat-a")) == 21 and len(b.list_messages("chat-b")) == 21
+    assert a.list_messages("chat-b") == [] and b.list_messages("chat-a") == []
+    a.close()
+    b.close()

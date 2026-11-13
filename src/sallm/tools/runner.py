@@ -35,6 +35,8 @@ class CliTool:
     name: str
     argv: list[str]
     summary: str = ""
+    # Seconds before the run is killed; None uses the caller's timeout (DEFAULT_TIMEOUT).
+    timeout: float | None = None
 
 
 @dataclass
@@ -305,7 +307,7 @@ def _run_one_command(
             error=f"Error: unknown tool '{name}'. Available: {available}",
             returncode=-1,
         )
-    return run_tool(tool, argv[1:], timeout=timeout, command=argv)
+    return run_tool(tool, argv[1:], timeout=tool.timeout or timeout, command=argv)
 
 
 def run_many(

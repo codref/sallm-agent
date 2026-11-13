@@ -234,9 +234,10 @@ def test_stacked_agent_resume(tmp_path):
 
 def test_schema_version_2(tmp_path):
     from sallm.state import SessionRepository
-    from sallm.state.models import SCHEMA_VERSION, PendingExtract, SchemaMeta
+    from sallm.state.models import SCHEMA_VERSION
 
     repo = SessionRepository(tmp_path / "v2.db")
+    SchemaMeta, PendingExtract = repo.m.SchemaMeta, repo.m.PendingExtract
     assert SCHEMA_VERSION == 3
     row = SchemaMeta.get(SchemaMeta.key == "version")
     assert row.value == "3"
@@ -250,18 +251,18 @@ def test_schema_version_2(tmp_path):
 
 
 def test_schema_migrate_1_to_2(tmp_path):
-    from sallm.state.models import SCHEMA_VERSION, SchemaMeta, db
+    from sallm.state.models import SCHEMA_VERSION
     from sallm.state import SessionRepository
 
     path = tmp_path / "old.db"
     # Simulate a v1 DB: create tables with version marker 1.
     repo = SessionRepository(path)
-    SchemaMeta.update(value="1").where(SchemaMeta.key == "version").execute()
+    repo.m.SchemaMeta.update(value="1").where(repo.m.SchemaMeta.key == "version").execute()
     repo.close()
-    db.close()
 
     repo2 = SessionRepository(path)
-    assert SchemaMeta.get(SchemaMeta.key == "version").value == str(SCHEMA_VERSION)
+    meta = repo2.m.SchemaMeta
+    assert meta.get(meta.key == "version").value == str(SCHEMA_VERSION)
     repo2.ensure_session("s")
     repo2.enqueue_extract("s", 7)
     assert repo2.count_pending_extracts("s") == 1
